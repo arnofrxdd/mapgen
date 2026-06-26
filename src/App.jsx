@@ -605,16 +605,21 @@ export default function App() {
                 let bWidth, bDepth, gap, type;
                 if (terrain === T_WATER) { currentT += 5; continue; }
                 else if (terrain === T_CITY) {
-                    const ws = [12, 16, 20, 24, 30, 40]; // Much wider variations
+                    // Clean voxel-grid widths: multiples of 8
+                    const ws = [8, 16, 24, 32, 40];
                     bWidth = ws[_floor(_random() * ws.length)];
-                    bDepth = edgeCityDepth; // Uniform block depth
-                    gap = _random() < 0.6 ? 0.0 : 0.5; // 60% chance for seamless connection (0.0 gap)
-                    type = _random() < 0.15 ? 'PARKING_LOT' : 'COMMERCIAL';
+                    // Depth in multiples of 4 to match voxel floors
+                    const ds = [8, 12, 16, 20];
+                    bDepth = ds[_floor(edgeCityDepth / 4) % ds.length];
+                    gap = _random() < 0.6 ? 0.0 : 0.0; // always seamless
+                    type = _random() < 0.12 ? 'PARKING_LOT' : 'COMMERCIAL';
                 } else if (terrain === T_SUBURB) {
-                    const ws = [8, 10, 12, 16];
+                    // Clean voxel widths: multiples of 4
+                    const ws = [8, 12, 16];
                     bWidth = ws[_floor(_random() * ws.length)];
-                    bDepth = edgeSuburbDepth; // Uniform block depth
-                    gap = _random() < 0.4 ? 0.0 : 0.5; // Attached townhouses sometimes
+                    const ds = [8, 12];
+                    bDepth = ds[_floor(edgeSuburbDepth / 4) % ds.length];
+                    gap = 0.0; // always flush in suburbs too
                     type = 'HOUSE';
                 } else {
                     bWidth = 2.5; bDepth = 2.5; gap = 2.5;

@@ -6,7 +6,7 @@ const ROAD_HW = {
   highway:7.5,causeway:6.0,street:4.5,coast:4.0,
   suburb_road:3.5,ramp:4.0,alley:2.0,
 };
-const BRIDGE_ELEV=5.0,ROAD_H=0.30,CURB_H=0.36,CURB_W=1.1;
+const BRIDGE_ELEV=12.0,ROAD_H=0.30,CURB_H=0.36,CURB_W=1.1;
 const FENCE_H=1.4,LAMP_H=8.5,LAMP_SPACING=28,CAR_W=1.8,CAR_D=3.5;
 const CHUNK_SIZE=1200;
 
@@ -112,14 +112,15 @@ function calculateJunctionPolygons(edges, nodes) {
 
 function bldgHeight(b,seed){
   const h=H1(b.x+seed*0.01,b.y+seed*0.07);
+  const snap = v => Math.round(v / 4) * 4; // snap to voxel grid of 4 units
   if(b.type==="PARKING_LOT")return 0.5;
-  if(b.type==="HOUSE")return 3.5+h*3.0;
-  if(b.type==="TREE")return 4.5+h*2.5;
+  if(b.type==="HOUSE")return snap(4+h*8);    // 4, 8, 12
+  if(b.type==="TREE")return 4+Math.round(h*2)*2; // 4, 6, 8
   const dist=Math.sqrt(b.x*b.x+b.y*b.y);
   const cf=Math.max(0,1-dist/2800);
-  if(cf>0.7)return 16+h*24; 
-  if(cf>0.4)return 9+h*15;
-  return 4+h*8;
+  if(cf>0.7)return snap(24+h*40);  // 24 - 64  downtown towers
+  if(cf>0.4)return snap(12+h*20);  // 12 - 32  mid-rise
+  return snap(8+h*12);             // 8  - 20  low-rise suburbs
 }
 
 const WATER_LVL = 0.35;
