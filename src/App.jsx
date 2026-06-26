@@ -693,22 +693,33 @@ export default function App() {
                     else if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'coast' || agent.type === 'park_path') {
                         // Raycast ahead to ensure there is actually land to connect to within range
                         let hitLand = false;
+                        let hasCity = false;
                         if (agent.type === 'street' || agent.type === 'suburb_road') {
                             for (let i = 1; i <= 180; i++) {
                                 const rx = agent.node.x + Math.cos(agent.angle) * (STEP_SIZE * i);
                                 const ry = agent.node.y + Math.sin(agent.angle) * (STEP_SIZE * i);
                                 // Causeways are local! Don't target land in adjacent chunks, or they'll die at the border.
                                 if (rx < minX || rx >= maxX || ry < minY || ry >= maxY) break;
-                                if (getTerrain(rx, ry, seedOffset) !== 'WATER') {
+                                const terrain = getTerrain(rx, ry, seedOffset);
+
+                                if (terrain !== 'WATER') {
+
                                     hitLand = true;
+
+                                    if (
+                                        terrain === 'CITY' ||
+                                        terrain === 'SUBURB'
+                                    ) {
+                                        hasCity = true;
+                                    }
+
                                     break;
                                 }
                             }
                         }
 
                         // Spawn causeway ONLY if it's guaranteed to reach land (no dead ends in the water)
-                        if (hitLand) {
-
+                        if (hitLand && hasCity) {
                             let alreadyExists = false;
 
                             for (const c of chunk.causewayTargets) {
