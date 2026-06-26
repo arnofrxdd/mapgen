@@ -3,8 +3,8 @@ import * as THREE from "three";
 
 // Road half-widths (full width = hw * 2)
 const ROAD_HW = {
-  highway:5.5,causeway:4.0,street:2.5,coast:2.0,
-  suburb_road:2.0,ramp:3.0,alley:1.0,park_path:0.7,
+  highway:7.5,causeway:6.0,street:4.5,coast:4.0,
+  suburb_road:3.5,ramp:4.0,alley:1.5,park_path:1.0,
 };
 const BRIDGE_ELEV=5.0,ROAD_H=0.30,CURB_H=0.36,CURB_W=1.1;
 const FENCE_H=1.4,LAMP_H=8.5,LAMP_SPACING=28,CAR_W=1.8,CAR_D=3.5;
@@ -1011,3 +1011,4 @@ export default function VoxelView({worldRef,onClose}){
     </div>
   );
 }
+

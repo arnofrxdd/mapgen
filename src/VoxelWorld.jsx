@@ -1,10 +1,10 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
 const TILE_SIZE       = 40;
-const ROAD_WIDTH_MAIN = 16;
-const ROAD_WIDTH_SIDE = 10;
-const SIDEWALK_W      = 3.0;
+const ROAD_WIDTH_MAIN = 22;
+const ROAD_WIDTH_SIDE = 16;
+const SIDEWALK_W      = 3.5;
 const BUILDING_MIN_H  = 8;
 const BUILDING_MAX_H  = 72;
 const RENDER_RADIUS   = 7;
@@ -143,59 +143,78 @@ function buildChunk(gx, gz, mats) {
       }
     }
   } else {
-    const n = fbm(worldX, worldZ);
     const dist = Math.sqrt(gx*gx + gz*gz);
     const density = Math.max(0, 1.0 - dist/80);
-    const bh = BUILDING_MIN_H + Math.pow(n, 0.8) * (0.4 + density*0.6) * (BUILDING_MAX_H - BUILDING_MIN_H);
-    const inset = 1.5;
-    const bw = TILE_SIZE - inset*2;
-    const bd = TILE_SIZE - inset*2;
-    const bMat = mats.buildingMats[Math.floor(hash(gx*3, gz*7) * mats.buildingMats.length)];
-    group.add(makeBox(bw, bh, bd, bMat, 0, bh/2, 0));
-    group.add(makeBox(bw, 0.6, bd, mats.roofMat, 0, bh+0.3, 0));
-    const winMat = mats.windowMats[Math.floor(hash2(gx, gz, 1) * mats.windowMats.length)];
-    const wRows = Math.floor((bh-2)/3.5);
-    const wColsX = Math.floor(bw/3.2);
-    const wColsZ = Math.floor(bd/3.2);
-    for (let r = 0; r < wRows; r++) {
-      const wy = 2.0 + r*3.5 + 1.4;
-      for (let c = 0; c < wColsX; c++) {
-        if (hash2(gx*100+c, gz*100+r, 5) > 0.3) {
-          const wx = -bw/2 + 1.5 + c*(bw/wColsX);
-          group.add(makeBox(1.4, 1.6, 0.12, winMat, wx, wy,  bd/2+0.01));
-          group.add(makeBox(1.4, 1.6, 0.12, winMat, wx, wy, -bd/2-0.01));
+    
+    // Divide tile into smaller plots, tightly packed
+    const plots = [
+      { px: -1, pz: -1 }, { px: 1, pz: -1 },
+      { px: -1, pz: 1 }, { px: 1, pz: 1 }
+    ];
+    
+    const plotSize = (TILE_SIZE / 2) - 0.2; // Tightly packed buildings
+    
+    plots.forEach((plot, i) => {
+      const pSeed = hash2(gx, gz, i);
+      // Sparsify outskirts
+      if (pSeed > density * 1.5 && density < 0.4) return;
+
+      const pxOffset = plot.px * (TILE_SIZE / 4);
+      const pzOffset = plot.pz * (TILE_SIZE / 4);
+      
+      const localN = fbm(worldX + pxOffset, worldZ + pzOffset);
+      const bh = BUILDING_MIN_H + Math.pow(localN, 0.8) * (0.4 + density*0.6) * (BUILDING_MAX_H - BUILDING_MIN_H) * (0.6 + pSeed*0.4);
+      
+      const bw = plotSize - 1.0;
+      const bd = plotSize - 1.0;
+      
+      const bMat = mats.buildingMats[Math.floor(hash(gx*3+i, gz*7+i) * mats.buildingMats.length)];
+      group.add(makeBox(bw, bh, bd, bMat, pxOffset, bh/2, pzOffset));
+      group.add(makeBox(bw, 0.6, bd, mats.roofMat, pxOffset, bh+0.3, pzOffset));
+      
+      const winMat = mats.windowMats[Math.floor(hash2(gx+i, gz+i, 1) * mats.windowMats.length)];
+      const wRows = Math.floor((bh-2)/3.5);
+      const wColsX = Math.floor(bw/3.2);
+      const wColsZ = Math.floor(bd/3.2);
+      
+      for (let r = 0; r < wRows; r++) {
+        const wy = 2.0 + r*3.5 + 1.4;
+        for (let c = 0; c < wColsX; c++) {
+          if (hash2(gx*10+c, gz*10+r, 5+i) > 0.3) {
+            const wx = pxOffset - bw/2 + 1.5 + c*(bw/wColsX);
+            group.add(makeBox(1.4, 1.6, 0.12, winMat, wx, wy, pzOffset + bd/2+0.01));
+            group.add(makeBox(1.4, 1.6, 0.12, winMat, wx, wy, pzOffset - bd/2-0.01));
+          }
+        }
+        for (let c = 0; c < wColsZ; c++) {
+          if (hash2(gx*10+c+50, gz*10+r+50, 6+i) > 0.3) {
+            const wz = pzOffset - bd/2 + 1.5 + c*(bd/wColsZ);
+            group.add(makeBox(0.12, 1.6, 1.4, winMat, pxOffset - bw/2-0.01, wy, wz));
+            group.add(makeBox(0.12, 1.6, 1.4, winMat, pxOffset + bw/2+0.01, wy, wz));
+          }
         }
       }
-      for (let c = 0; c < wColsZ; c++) {
-        if (hash2(gx*100+c+50, gz*100+r+50, 6) > 0.3) {
-          const wz = -bd/2 + 1.5 + c*(bd/wColsZ);
-          group.add(makeBox(0.12, 1.6, 1.4, winMat, -bw/2-0.01, wy, wz));
-          group.add(makeBox(0.12, 1.6, 1.4, winMat,  bw/2+0.01, wy, wz));
+      
+      if (bh > 25 && hash(gx*5+i, gz*3+i) > 0.6) {
+        const ni = Math.floor(hash2(gx+i, gz+i, 2) * mats.neonMats.length);
+        const sh = 3 + hash2(gx, gz, 8+i)*3;
+        const sw = 4 + hash2(gx, gz, 9+i)*4;
+        const sy = bh * (0.5 + hash2(gx, gz, 10+i)*0.4);
+        group.add(makeBox(sw, sh, 0.4, mats.neonMats[ni], pxOffset, sy, pzOffset + bd/2+0.25));
+        group.add(makeBox(sw+0.6, sh+0.6, 0.15, new THREE.MeshBasicMaterial({ color: mats.neonColors[ni], transparent: true, opacity: 0.25, depthWrite: false }), pxOffset, sy, pzOffset + bd/2+0.1));
+      }
+      
+      if (bh > 15 && hash(gx*7+i, gz*11+i) > 0.4) {
+        const bc = Math.floor(hash2(gx, gz, 3+i)*2)+1;
+        for (let b = 0; b < bc; b++) {
+          const rx = pxOffset + (hash2(gx, gz, b+20+i)-0.5)*(bw-4);
+          const rz = pzOffset + (hash2(gx, gz, b+30+i)-0.5)*(bd-4);
+          const rw2 = 1.5 + hash2(gx, gz, b+40+i)*2;
+          const rh = 1.0 + hash2(gx, gz, b+50+i)*2;
+          group.add(makeBox(rw2, rh, rw2, mats.roofMat, rx, bh+rh/2, rz));
         }
       }
-    }
-    if (bh > 25 && hash(gx*5, gz*3) > 0.45) {
-      const ni = Math.floor(hash2(gx, gz, 2) * mats.neonMats.length);
-      const sh = 3.5 + hash2(gx, gz, 8)*4;
-      const sw = 5 + hash2(gx, gz, 9)*8;
-      const sy = bh * (0.55 + hash2(gx, gz, 10)*0.35);
-      group.add(makeBox(sw, sh, 0.4, mats.neonMats[ni], 0, sy, bd/2+0.25));
-      group.add(makeBox(sw+0.6, sh+0.6, 0.15, new THREE.MeshBasicMaterial({ color: mats.neonColors[ni], transparent: true, opacity: 0.25, depthWrite: false }), 0, sy, bd/2+0.1));
-    }
-    if (bh > 15 && hash(gx*7, gz*11) > 0.5) {
-      const bc = Math.floor(hash2(gx, gz, 3)*4)+1;
-      for (let b = 0; b < bc; b++) {
-        const rx = (hash2(gx, gz, b+20)-0.5)*(bw-5);
-        const rz = (hash2(gx, gz, b+30)-0.5)*(bd-5);
-        const rw2 = 2 + hash2(gx, gz, b+40)*4;
-        const rh = 1.5 + hash2(gx, gz, b+50)*3;
-        group.add(makeBox(rw2, rh, rw2, mats.roofMat, rx, bh+rh/2, rz));
-      }
-    }
-    if (bh > 30 && hash(gx*13, gz*17) > 0.75) {
-      group.add(makeBox(1.5, 4, 1.5, mats.poleMat, -bw*0.3, bh+2, bd*0.3));
-      group.add(makeBox(4.5, 5, 4.5, mats.buildingMats[0], -bw*0.3, bh+6.5, bd*0.3));
-    }
+    });
   }
 
   group.position.set(worldX, 0, worldZ);

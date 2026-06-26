@@ -442,9 +442,6 @@ export default function App() {
                 for (let i = 0; i < 4; i++) {
                     chunk.agents.push({ node: centerNode, angle: i * _PI_2, type: 'highway', life: 1800, z: 1, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
                 }
-                for (let i = 0; i < 4; i++) {
-                    chunk.agents.push({ node: centerNode, angle: i * _PI_2 + _PI_4, type: 'highway', life: 120, z: 1, wasBridge: false, isCardinal: false });
-                }
                 chunk.agents.push({ node: centerNode, angle: 0, type: 'ramp', life: 5, z: 0 });
                 chunk.agents.push({ node: centerNode, angle: _PI, type: 'ramp', life: 5, z: 0 });
             } else {
@@ -527,8 +524,11 @@ export default function App() {
         const minX = chunk.cx * CHUNK_SIZE, maxX = minX + CHUNK_SIZE;
         const minY = chunk.cy * CHUNK_SIZE, maxY = minY + CHUNK_SIZE;
 
-        let roadHalfWidth = 1.5, sidewalk = 1.5;
-        if (eType === 'ramp') { roadHalfWidth = 2; sidewalk = 2; }
+        let roadHalfWidth = 3.5, sidewalk = 1.5;
+        if (eType === 'highway') { roadHalfWidth = 5.0; sidewalk = 2.0; }
+        if (eType === 'causeway') { roadHalfWidth = 4.0; sidewalk = 1.5; }
+        if (eType === 'ramp') { roadHalfWidth = 2.5; sidewalk = 1.5; }
+        if (eType === 'suburb_road') { roadHalfWidth = 2.5; sidewalk = 1.5; }
         if (eType === 'park_path') { roadHalfWidth = 0.5; sidewalk = 0.5; }
 
         for (let dir = -1; dir <= 1; dir += 2) {
@@ -544,13 +544,20 @@ export default function App() {
                 let bWidth, bDepth, gap, type;
                 if (terrain === T_WATER) { currentT += 5; continue; }
                 else if (terrain === T_CITY) {
-                    bWidth = 3 + _random() * 6; bDepth = 4 + _random() * 7; gap = 0.2;
+                    const ws = [4, 5, 6, 8];
+                    const ds = [4, 5, 6, 8, 10];
+                    bWidth = ws[_floor(_random() * ws.length)];
+                    bDepth = ds[_floor(_random() * ds.length)];
+                    gap = 0.05;
                     type = _random() < 0.15 ? 'PARKING_LOT' : 'COMMERCIAL';
                 } else if (terrain === T_SUBURB) {
-                    bWidth = 3 + _random() * 3; bDepth = 4 + _random() * 4; gap = 0.8;
+                    const ws = [3, 4, 5];
+                    bWidth = ws[_floor(_random() * ws.length)];
+                    bDepth = ws[_floor(_random() * ws.length)];
+                    gap = 0.5;
                     type = 'HOUSE';
                 } else {
-                    bWidth = 2 + _random() * 3; bDepth = bWidth; gap = 2;
+                    bWidth = 2.5; bDepth = 2.5; gap = 2.5;
                     type = 'TREE';
                 }
 
@@ -586,9 +593,9 @@ export default function App() {
                     generatedParts.push(basePart);
                 } else {
                     generatedParts.push(basePart);
-                    if (type === 'COMMERCIAL' && _random() < 0.3) {
-                        const wingW = 2 + _random() * 3;
-                        const wingH = bDepth * (0.4 + _random() * 0.4);
+                    if (type === 'COMMERCIAL' && _random() < 0.25 && bWidth >= 5 && bDepth >= 5) {
+                        const wingW = _floor(bWidth * 0.5) || 3;
+                        const wingH = _floor(bDepth * 0.6) || 3;
                         const lx = (bWidth * 0.5 + wingW * 0.5) * (_random() > 0.5 ? 1 : -1);
                         const ly = (bDepth * 0.5 - wingH * 0.5) * (_random() > 0.5 ? 1 : -1);
                         generatedParts.push({
@@ -630,7 +637,7 @@ export default function App() {
                     }
                     currentT += bWidth + gap;
                 } else {
-                    currentT += 0.5;
+                    currentT += 1.0;
                 }
             }
         }
@@ -671,7 +678,7 @@ export default function App() {
                         if (!nearest) {
                             const newNode = addNode(chunk, rx, ry, 0);
                             for (let i = 0; i < 4; i++) {
-                                agents.push({ node: newNode, angle: i * _PI_2 + _random(), type: 'street', life: 120, z: 0 });
+                                agents.push({ node: newNode, angle: i * _PI_2, type: 'street', life: 120, z: 0 });
                             }
                         }
                     }
@@ -851,8 +858,6 @@ export default function App() {
                             agent.hasSpawnedPerpendiculars = true;
                             agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'highway', life: 1800, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
                             agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'highway', life: 1800, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
-                            agents.push({ node: agent.node, angle: agent.angle + _PI_4, type: 'highway', life: 120, z: agent.z, wasBridge: false, isCardinal: false });
-                            agents.push({ node: agent.node, angle: agent.angle - _PI_4, type: 'highway', life: 120, z: agent.z, wasBridge: false, isCardinal: false });
                             agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'ramp', life: 5, z: 0 });
                             agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'ramp', life: 5, z: 0 });
                         }
@@ -1073,14 +1078,19 @@ export default function App() {
             };
 
             // Ground casings
-            batchDraw('#1e293b', 3.8, e => !e.isBridge && (e.type === 'street' || e.type === 'coast'));
-            batchDraw('#334155', 3.0, e => !e.isBridge && e.type === 'suburb_road');
-            batchDraw('#1e293b', 3.8, e => !e.isBridge && e.type === 'ramp');
+            batchDraw('#1e293b', 5.8, e => !e.isBridge && (e.type === 'street' || e.type === 'coast'));
+            batchDraw('#334155', 4.0, e => !e.isBridge && e.type === 'suburb_road');
+            batchDraw('#1e293b', 4.8, e => !e.isBridge && e.type === 'ramp');
 
             // Ground fills
-            batchDraw('#ffffff', 2.2, e => !e.isBridge && (e.type === 'street' || e.type === 'coast'));
-            batchDraw('#cbd5e1', 1.6, e => !e.isBridge && e.type === 'suburb_road');
-            batchDraw('#facc15', 2.2, e => !e.isBridge && e.type === 'ramp');
+            batchDraw('#ffffff', 4.2, e => !e.isBridge && (e.type === 'street' || e.type === 'coast'));
+            batchDraw('#cbd5e1', 2.6, e => !e.isBridge && e.type === 'suburb_road');
+            batchDraw('#facc15', 3.2, e => !e.isBridge && e.type === 'ramp');
+
+            // Lane markers (multi-lane main streets)
+            ctx.save(); ctx.setLineDash([6, 6]);
+            batchDraw('#cbd5e1', 0.5, e => !e.isBridge && (e.type === 'street' || e.type === 'coast'));
+            ctx.restore();
 
             // Alleys dashed
             ctx.save(); ctx.setLineDash([2, 3]);
@@ -1167,12 +1177,18 @@ export default function App() {
             ctx.restore();
 
             // Casings
-            batchDraw('#0f172a', 6.0, e => e.type === 'highway');
-            batchDraw('#78350f', 4.5, e => e.type === 'causeway');
+            batchDraw('#0f172a', 8.0, e => e.type === 'highway');
+            batchDraw('#78350f', 6.0, e => e.type === 'causeway');
 
             // Fills
-            batchDraw('#f59e0b', 3.8, e => e.type === 'highway');
-            batchDraw('#d97706', 2.5, e => e.type === 'causeway');
+            batchDraw('#f59e0b', 5.8, e => e.type === 'highway');
+            batchDraw('#d97706', 4.5, e => e.type === 'causeway');
+
+            // Multi-lane markings for elevated roads
+            ctx.save(); ctx.setLineDash([5, 5]);
+            batchDraw('#fffbeb', 0.4, e => e.type === 'highway');
+            batchDraw('#fef3c7', 0.3, e => e.type === 'causeway');
+            ctx.restore();
         };
 
         // Terrain tiles
