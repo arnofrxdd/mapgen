@@ -472,8 +472,8 @@ export default function App() {
                 for (let i = 0; i < 4; i++) {
                     chunk.agents.push({ node: centerNode, angle: i * _PI_2, type: 'highway', life: 1800, z: 1, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
                 }
-                chunk.agents.push({ node: centerNode, angle: 0, type: 'ramp', life: 5, z: 0 });
-                chunk.agents.push({ node: centerNode, angle: _PI, type: 'ramp', life: 5, z: 0 });
+                chunk.agents.push({ node: centerNode, angle: 0, type: 'ramp', life: 5, z: 1, dz: -1/5 });
+                chunk.agents.push({ node: centerNode, angle: _PI, type: 'ramp', life: 5, z: 1, dz: -1/5 });
             } else {
                 return null;
             }
@@ -909,7 +909,7 @@ export default function App() {
                                 break;
                             }
                         }
-                        if (hitLand && hasCity) {
+                        if (hitLand) {
                             let alreadyExists = false;
                             const ct = chunk.causewayTargets;
                             for (let ci = 0; ci < ct.length; ci++) {
@@ -1015,8 +1015,8 @@ export default function App() {
                             agent.hasSpawnedPerpendiculars = true;
                             agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'highway', life: 1800, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
                             agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'highway', life: 1800, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
-                            agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'ramp', life: 8, z: 0, turnDir: 1 });
-                            agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'ramp', life: 8, z: 0, turnDir: -1 });
+                            agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'ramp', life: 8, z: agent.z, dz: -agent.z/8, turnDir: 1 });
+                            agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'ramp', life: 8, z: agent.z, dz: -agent.z/8, turnDir: -1 });
                         }
                     }
 
@@ -1044,17 +1044,18 @@ export default function App() {
                         let cityNode = findNearestNode(chunk, nx, ny, 150, nextNode, zLevel);
                         if (cityNode && isInvalidRampConnection(chunk, cityNode)) cityNode = null;
                         if (cityNode) chunk.edges.push({ n1: nextNode, n2: cityNode, type: 'ramp', isBridge: false });
-                        agents.push({ node: nextNode, angle: agent.angle + _PI / 6, type: 'ramp', life: 10, z: 0, turnDir: 1 });
-                        agents.push({ node: nextNode, angle: agent.angle - _PI / 6, type: 'ramp', life: 10, z: 0, turnDir: -1 });
+                        agents.push({ node: nextNode, angle: agent.angle + _PI / 6, type: 'ramp', life: 10, z: agent.z, dz: -agent.z/10, turnDir: 1 });
+                        agents.push({ node: nextNode, angle: agent.angle - _PI / 6, type: 'ramp', life: 10, z: agent.z, dz: -agent.z/10, turnDir: -1 });
                     }
                     agent.wasBridge = isBridge;
 
                     if (!isBridge && !agent.isCardinal && _random() < 0.25) {
                         const tDir = _random() > 0.5 ? 1 : -1;
-                        agents.push({ node: nextNode, angle: agent.angle + tDir * _PI_4, type: 'ramp', life: 8, z: 0, turnDir: tDir });
+                        agents.push({ node: nextNode, angle: agent.angle + tDir * _PI_4, type: 'ramp', life: 8, z: agent.z, dz: -agent.z/8, turnDir: tDir });
                     }
                 } else if (agent.type === 'ramp') {
                     agent.angle += (agent.turnDir || (_random() > 0.5 ? 1 : -1)) * 0.18;
+                    if (agent.dz) agent.z = Math.max(0, agent.z + agent.dz);
                 } else if (agent.type === 'street' || agent.type === 'suburb_road') {
                     // if (_random() < 0.1) agent.angle += (_random() > 0.5 ? _PI_4 : -_PI_4);
                     // Adjusted branching probability for a balance of cuts and block lengths

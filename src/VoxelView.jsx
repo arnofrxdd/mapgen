@@ -26,6 +26,7 @@ function findLineIntersection(ax, ay, ux, uy, bx, by, vx, vy) {
 function calculateJunctionPolygons(edges, nodes) {
   const nodeEdges = new Map();
   for (const e of edges) {
+    if (e.type === 'ramp') continue; // Prevent ramps from creating flat junction polygons
     if (!nodeEdges.has(e.n1.id)) nodeEdges.set(e.n1.id, []);
     if (!nodeEdges.has(e.n2.id)) nodeEdges.set(e.n2.id, []);
     nodeEdges.get(e.n1.id).push({ edge: e, isN1: true });
@@ -365,8 +366,8 @@ function buildRoad(builder,e,mats,nodeConnections,junctionPolygons){
   const n1Poly = junctionPolygons.get(e.n1.id);
   const n2Poly = junctionPolygons.get(e.n2.id);
   
-  const offset1 = n1Poly && n1Poly.roadOffsets.has(e.id) ? n1Poly.roadOffsets.get(e.id) : hw;
-  const offset2 = n2Poly && n2Poly.roadOffsets.has(e.id) ? n2Poly.roadOffsets.get(e.id) : hw;
+  let offset1 = n1Poly && n1Poly.roadOffsets.has(e.id) ? n1Poly.roadOffsets.get(e.id) : hw;
+  let offset2 = n2Poly && n2Poly.roadOffsets.has(e.id) ? n2Poly.roadOffsets.get(e.id) : hw;
   
   const nx = dx / len;
   const nz = dz / len;
@@ -375,24 +376,28 @@ function buildRoad(builder,e,mats,nodeConnections,junctionPolygons){
   let endX = e.n2.x, endZ = e.n2.y;
   let newLen = len;
   
-  if (len > offset1 + offset2 + 1.0) {
+  if (e.type !== 'ramp' && len > offset1 + offset2 + 1.0) {
     startX = e.n1.x + nx * offset1;
     startZ = e.n1.y + nz * offset1;
     endX = e.n2.x - nx * offset2;
     endZ = e.n2.y - nz * offset2;
     newLen = len - offset1 - offset2;
+  } else if (e.type === 'ramp') {
+    // Ramps must connect seamlessly since they have no flat junctions
+    offset1 = 0;
+    offset2 = 0;
   }
   
   const cx = (startX + endX) * 0.5;
   const cz = (startZ + endZ) * 0.5;
   
   const isEL=e.isBridge&&(e.type==="highway"||e.type==="causeway");
-  const y1 = e.n1.z > 0 ? BRIDGE_ELEV : 0;
-  const y2 = e.n2.z > 0 ? BRIDGE_ELEV : 0;
+  const y1 = (e.n1.z || 0) * BRIDGE_ELEV;
+  const y2 = (e.n2.z || 0) * BRIDGE_ELEV;
   
-  // Ramps slope exactly from the edge of the flat junctions
-  const startY = y1;
-  const endY = y2;
+  // Compute precise elevation at the offset boundaries
+  const startY = y1 + (y2 - y1) * (offset1 / len);
+  const endY = y2 - (y2 - y1) * (offset2 / len);
   const dy = endY - startY;
   const midY = (startY + endY) * 0.5;
   const pitch = Math.atan2(dy, newLen);
@@ -570,7 +575,7 @@ function buildJunctions(builder, nodes, edges, mats, nodeConnections, junctionPo
     if (!n || !poly.shapePts || poly.shapePts.length < 3) continue;
 
     const isBridgeNode = n.z > 0;
-    const baseY = isBridgeNode ? BRIDGE_ELEV : 0;
+    const baseY = (n.z || 0) * BRIDGE_ELEV;
 
     const info = nodeConnections.get(nodeId);
     if (!info) continue;
@@ -648,6 +653,88 @@ function buildJunctions(builder, nodes, edges, mats, nodeConnections, junctionPo
   }
 }
 
+function buildSmoothRamps(builder, rampEdges, mats) {
+  const paths = [];
+  const edgeSet = new Set(rampEdges);
+  
+  while(edgeSet.size > 0) {
+    const startEdge = edgeSet.values().next().value;
+    edgeSet.delete(startEdge);
+    
+    const path = [startEdge.n1, startEdge.n2];
+    
+    let current = startEdge.n2;
+    while(true) {
+      let nextEdge = null;
+      for (const e of edgeSet) {
+        if (e.n1.id === current.id) { path.push(e.n2); nextEdge = e; break; }
+        if (e.n2.id === current.id) { path.push(e.n1); nextEdge = e; break; }
+      }
+      if (nextEdge) { current = path[path.length - 1]; edgeSet.delete(nextEdge); } 
+      else break;
+    }
+    
+    current = startEdge.n1;
+    while(true) {
+      let prevEdge = null;
+      for (const e of edgeSet) {
+        if (e.n1.id === current.id) { path.unshift(e.n2); prevEdge = e; break; }
+        if (e.n2.id === current.id) { path.unshift(e.n1); prevEdge = e; break; }
+      }
+      if (prevEdge) { current = path[0]; edgeSet.delete(prevEdge); } 
+      else break;
+    }
+    paths.push(path);
+  }
+
+  for (const path of paths) {
+    if (path.length < 2) continue;
+    
+    const points = path.map(n => new THREE.Vector3(n.x, (n.z || 0) * BRIDGE_ELEV, n.y));
+    const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.5);
+    
+    const len = curve.getLength();
+    const segments = Math.max(2, Math.floor(len / 3.0)); 
+    
+    const hw = ROAD_HW['ramp'] || 4.0;
+    const rMat = mats.ramp || mats.asphalt;
+    
+    for (let i = 0; i < segments; i++) {
+      const t1 = i / segments;
+      const t2 = (i + 1) / segments;
+      
+      const p1 = curve.getPointAt(t1);
+      const p2 = curve.getPointAt(t2);
+      
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const dz = p2.z - p1.z;
+      
+      const dist = Math.hypot(dx, dz);
+      const pitch = Math.atan2(dy, dist);
+      const ang = Math.atan2(dz, dx);
+      
+      const cx = (p1.x + p2.x) * 0.5;
+      const cz = (p1.z + p2.z) * 0.5;
+      const midY = (p1.y + p2.y) * 0.5;
+      const boxLen = dist + 0.1; 
+      
+      builder.addBox(boxLen, ROAD_H, hw * 2, rMat, cx, midY + ROAD_H / 2, cz, -ang, pitch);
+      
+      for (const s of [-1, 1]) {
+        const ro = s * (hw - 0.28);
+        const ox = -Math.sin(ang) * ro;
+        const oz = Math.cos(ang) * ro;
+        builder.addBox(boxLen, 0.6, 0.18, mats.bridgeSide, cx + ox, midY + ROAD_H + 0.3, cz + oz, -ang, pitch);
+      }
+      
+      if (i % 3 === 0) {
+        builder.addBox(boxLen * 0.6, 0.06, 0.22, mats.whiteDiv, cx, midY + ROAD_H + 0.03, cz, -ang, pitch);
+      }
+    }
+  }
+}
+
 function buildBuilding(builder, b, mats, seed) {
   const bx = b.x, bz = b.y, bw = b.w, bd = b.h, ang = b.angle;
   const bh = bldgHeight(b, seed);
@@ -708,14 +795,55 @@ function buildBuilding(builder, b, mats, seed) {
   }
 
   if (b.type === "HOUSE") {
-    const hw = bw * 0.8, hd = bd * 0.8;
-    const hH = 3.0 + H2(bx, bz, 5) * 2.0;
+    // 1. Dimensions
+    const hw = bw * 0.55; 
+    const hd = bd * 0.7;
+    const hH = 3.0 + H2(bx, bz, 5) * 1.5;
     
-    // Core house box
-    lbox(hw, hH, hd, mats.houseWall, hH / 2);
+    // 2. Offsets (move main house slightly to one side, garage to the other)
+    const isGarageLeft = H2(bx, bz, 6) > 0.5;
+    const mainXOffset = isGarageLeft ? 1.5 : -1.5;
+    const garageXOffset = isGarageLeft ? -2.2 : 2.2;
     
-    // Roof
-    builder.addPrism(hw + 0.4, 2.0, hd + 0.4, mats.houseRoof, bx, hH + 1.0, bz, -ang);
+    // 3. Main Body
+    lboxOffset(hw, hH, hd, mats.houseWall, hH / 2, mainXOffset, 0);
+    
+    // Main Roof
+    const cosA = Math.cos(-ang), sinA = Math.sin(-ang);
+    const mwx = bx + cosA * mainXOffset;
+    const mwz = bz + sinA * mainXOffset;
+    builder.addPrism(hw + 0.4, 2.0, hd + 0.4, mats.houseRoof, mwx, hH + 1.0, mwz, -ang);
+    
+    // Chimney
+    if (H2(bx, bz, 7) > 0.4) {
+       lboxOffset(0.6, 1.8, 0.6, mats.trunk, hH + 1.2, mainXOffset - (isGarageLeft ? hw*0.3 : -hw*0.3), 0);
+    }
+    
+    // Front Door
+    lboxOffset(0.8, 2.0, 0.1, mats.trunk, 1.0, mainXOffset, hd/2 + 0.05);
+    // Door Step
+    lboxOffset(1.4, 0.2, 1.0, mats.gndCity, 0.1, mainXOffset, hd/2 + 0.5);
+    
+    // Windows
+    if (hw > 3.0) {
+      lboxOffset(0.8, 1.0, 0.1, mats.winWarm, 1.5, mainXOffset + 1.2, hd/2 + 0.05);
+      lboxOffset(0.8, 1.0, 0.1, mats.winWarm, 1.5, mainXOffset - 1.2, hd/2 + 0.05);
+    }
+    
+    // 4. Garage
+    const gw = 3.2, gh = 2.6, gd = hd * 0.85;
+    lboxOffset(gw, gh, gd, mats.houseWall, gh / 2, garageXOffset, -0.5);
+    
+    // Garage Roof
+    const gwx = bx + cosA * garageXOffset - sinA * (-0.5);
+    const gwz = bz + sinA * garageXOffset + cosA * (-0.5);
+    builder.addPrism(gw + 0.2, 1.5, gd + 0.2, mats.houseRoof, gwx, gh + 0.75, gwz, -ang);
+    
+    // Garage Door
+    lboxOffset(2.4, 2.0, 0.1, mats.whiteDiv, 1.0, garageXOffset, gd/2 - 0.55);
+    
+    // Driveway
+    lboxOffset(2.4, 0.1, 4.0, mats.gndCity, 0.05, garageXOffset, gd/2 + 1.45);
     
     return;
   }
@@ -724,61 +852,57 @@ function buildBuilding(builder, b, mats, seed) {
   const finalLw = bw * 0.85;
   const finalLd = bd * 0.85;
   const archStyle = Math.floor(H2(bx, bz, 99) * 3);
+  const baseY = 0.4;
   
   if (b.isTriangle) {
+    // Triangular Foundation Plaza
+    builder.addPrism(bw * 0.95, baseY, bd * 0.95, mats.gndCity, bx, baseY / 2, bz, -ang);
+
     // Solid triangular core
-    builder.addPrism(finalLw, bh, finalLd, tMat, bx, bh / 2, bz, -ang);
+    builder.addPrism(finalLw, bh, finalLd, tMat, bx, baseY + bh / 2, bz, -ang);
     
     // Ledges to fake windows without buggy rendering
     const floors = Math.floor(bh / 3.0);
     for (let i = 1; i < floors; i++) {
-       const fy = i * 3.0;
+       const fy = baseY + i * 3.0;
        builder.addPrism(finalLw + 0.4, 0.4, finalLd + 0.4, wMat, bx, fy, bz, -ang);
     }
     
     // Parapet
-    builder.addPrism(finalLw, 0.8, finalLd, tTop, bx, bh + 0.4, bz, -ang);
+    builder.addPrism(finalLw, 0.8, finalLd, tTop, bx, baseY + bh + 0.4, bz, -ang);
   } else {
+    // Rectangular Foundation Plaza (Tiered)
+    const plazaW = bw * 0.95;
+    const plazaD = bd * 0.95;
+    lbox(plazaW, baseY / 2, plazaD, mats.gndCity, baseY / 4);
+    lbox(plazaW - 0.8, baseY / 2, plazaD - 0.8, mats.gndCity, (baseY / 4) * 3);
+    
+    // Base Planters
+    if (plazaW > 10 && plazaD > 10 && H2(bx, bz, 80) > 0.4) {
+      lboxOffset(plazaW - 2.0, 0.6, 1.2, mats.leafGreen, 0.5, 0, plazaD / 2 - 0.6);
+      lboxOffset(plazaW - 2.0, 0.6, 1.2, mats.leafGreen, 0.5, 0, -plazaD / 2 + 0.6);
+    }
+
     // Rectangular core (Windows)
-    lbox(finalLw, bh, finalLd, wMat, bh / 2);
+    lbox(finalLw, bh, finalLd, wMat, baseY + bh / 2);
     
     // Horizontal ledges wrapping around the core tightly
     const floorH = 3.0;
     const floors = Math.floor(bh / floorH);
     for (let i = 0; i <= floors; i++) {
-       const fy = i * floorH;
+       const fy = baseY + i * floorH;
        const ledgeThickness = (i === 0 || i === floors) ? 0.8 : 0.4;
        lbox(finalLw + 0.4, ledgeThickness, finalLd + 0.4, tMat, fy);
     }
     
-    // Vertical columns perfectly aligned with the exterior boundary
-    const colSpacing = 3.0;
-    const colsW = Math.max(2, Math.floor(finalLw / colSpacing));
-    const colW = archStyle === 0 ? 0.8 : 0.4;
-    
-    // Front and Back columns spanning the entire building width
-    for (let i = 0; i <= colsW; i++) {
-       const t = i / colsW;
-       const cx = -finalLw / 2 + finalLw * t;
-       lboxOffset(colW, bh, 0.4, tMat, bh / 2, cx, finalLd / 2);
-       lboxOffset(colW, bh, 0.4, tMat, bh / 2, cx, -finalLd / 2);
-    }
-    
-    // Left and Right columns
-    const colsD = Math.max(2, Math.floor(finalLd / colSpacing));
-    for (let i = 0; i <= colsD; i++) {
-       const t = i / colsD;
-       const cz = -finalLd / 2 + finalLd * t;
-       lboxOffset(0.4, bh, colW, tMat, bh / 2, finalLw / 2, cz);
-       lboxOffset(0.4, bh, colW, tMat, bh / 2, -finalLw / 2, cz);
-    }
+    // Removed vertical columns as per user request
     
     // Roof Parapet and details
-    lbox(finalLw, 0.8, finalLd, tTop, bh + 0.4);
+    lbox(finalLw, 0.8, finalLd, tTop, baseY + bh + 0.4);
     
     if (finalLw > 15 && finalLd > 15 && H2(bx, bz, 30) > 0.4) {
-      lbox(10.0, 0.2, 10.0, tTop, bh + 0.8);
-      lbox(9.0, 0.1, 9.0, mats.centerLine, bh + 1.0);
+      lbox(10.0, 0.2, 10.0, tTop, baseY + bh + 0.8);
+      lbox(9.0, 0.1, 9.0, mats.centerLine, baseY + bh + 1.0);
     }
     
     // Roof clutter
@@ -786,7 +910,7 @@ function buildBuilding(builder, b, mats, seed) {
     for (let i = 0; i < units; i++) {
        const rx = (H2(bx, bz, i + 35) - 0.5) * (finalLw * 0.5);
        const rz = (H2(bx, bz, i + 37) - 0.5) * (finalLd * 0.5);
-       lboxOffset(1.8, 1.4, 1.8, mats.clutterMat, bh + 0.8, rx, rz);
+       lboxOffset(1.8, 1.4, 1.8, mats.clutterMat, baseY + bh + 0.8, rx, rz);
     }
   }
 }
@@ -828,6 +952,25 @@ function buildChunkGroup(chunk,mats,seed,world){
 
   const builder = new InstancedChunkBuilder(mats);
   
+  const distToSegment = (px, py, x1, y1, x2, y2) => {
+    const l2 = (x2 - x1) ** 2 + (y2 - y1) ** 2;
+    if (l2 === 0) return Math.hypot(px - x1, py - y1);
+    let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
+  };
+
+  const isPointClear = (px, pz, radius) => {
+    for (const b of chunk.buildings) {
+      if (Math.hypot(b.x - px, b.y - pz) < Math.max(b.w, b.h) * 0.7 + radius) return false;
+    }
+    for (const e of chunk.edges) {
+      const hw = ROAD_HW[e.type] ?? 2.0;
+      if (distToSegment(px, pz, e.n1.x, e.n1.y, e.n2.x, e.n2.y) < hw + radius + 1.0) return false;
+    }
+    return true;
+  };
+
   // Render a 30x30 grid of terrain tiles (40m size) matching App.jsx terrain noise
   const TILE_RES = 30;
   const TILE_W = CHUNK_SIZE / TILE_RES;
@@ -838,20 +981,47 @@ function buildChunkGroup(chunk,mats,seed,world){
       const tType = getTerrainType(px, pz, seed, world);
       
       if (tType === "WATER") {
-        // Recessed water (Y=-0.7, thickness=0.2)
         builder.addBox(TILE_W, 0.2, TILE_W, mats.gndWater, px, -0.7, pz);
       } else {
         const mat = tType === "CITY" ? mats.gndCity 
                   : tType === "SUBURB" ? mats.gndSuburb 
                   : mats.gndPark;
-        // Flat land ground
         builder.addBox(TILE_W, 0.2, TILE_W, mat, px, -0.1, pz);
+
+        // Scatter natural clutter on empty Park and Suburb land
+        if (tType === "PARK" || tType === "SUBURB") {
+          const scatterCount = Math.floor(H2(px, pz, 100) * 4) + 1; // 1 to 4 attempts
+          for (let i = 0; i < scatterCount; i++) {
+            const sx = px + (H2(px, pz, i + 101) - 0.5) * TILE_W * 0.8;
+            const sz = pz + (H2(px, pz, i + 201) - 0.5) * TILE_W * 0.8;
+            
+            if (isPointClear(sx, sz, 2.0)) {
+              const r = H2(sx, sz, 301);
+              if (r > 0.8) {
+                // Grassy Mound (Elevation bump)
+                builder.addBox(4.0 + r*3.0, 0.4, 4.0 + r*3.0, mat, sx, 0.1, sz, r * Math.PI);
+                builder.addBox(2.0 + r*2.0, 0.4, 2.0 + r*2.0, mat, sx, 0.3, sz, -r * Math.PI);
+              } else if (r > 0.6) {
+                // Large Rocks / Boulders
+                builder.addBox(1.5 + r, 1.2 + r, 1.5 + r, mats.clutterMat, sx, 0.5, sz, r * 10);
+                builder.addBox(1.0 + r, 0.8 + r, 1.0 + r, mats.clutterMat, sx + 0.8, 0.3, sz + 0.8, r * 5);
+              } else if (r > 0.4) {
+                // Bushes / Shrubs
+                builder.addBox(1.8, 1.2, 1.8, mats.leafGreen, sx, 0.5, sz, r * 10);
+              }
+            }
+          }
+        }
       }
     }
   }
   
-  for(const e of chunk.edges)buildRoad(builder,e,mats,nodeConnections,junctionPolygons);
+  const rampEdges = chunk.edges.filter(e => e.type === 'ramp');
+  for(const e of chunk.edges) {
+    if(e.type !== 'ramp') buildRoad(builder,e,mats,nodeConnections,junctionPolygons);
+  }
   buildJunctions(builder,chunk.nodes,chunk.edges,mats,nodeConnections,junctionPolygons);
+  buildSmoothRamps(builder, rampEdges, mats);
   for(const b of chunk.buildings)buildBuilding(builder,b,mats,seed);
   for(const f of chunk.fences)buildFence(builder,f,mats);
   
