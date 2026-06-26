@@ -163,7 +163,7 @@ const lineIntersect = (p0_x, p0_y, p1_x, p1_y, p2_x, p2_y, p3_x, p3_y) => {
 
 // --- Constants & Config ---
 const CHUNK_SIZE = 1200;
-const STEP_SIZE = 22;
+const STEP_SIZE = 20;
 const ALLEY_STEP = 14;
 const MERGE_RADIUS = 22;
 const GROWTH_SPEED = 20;
@@ -486,8 +486,8 @@ export default function App() {
                 for (let i = 0; i < 4; i++) {
                     chunk.agents.push({ node: centerNode, angle: i * _PI_2, type: 'highway', life: 2400, z: 1, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
                 }
-                chunk.agents.push({ node: centerNode, angle: 0, type: 'ramp', life: 5, z: 1, dz: -1/5 });
-                chunk.agents.push({ node: centerNode, angle: _PI, type: 'ramp', life: 5, z: 1, dz: -1/5 });
+                chunk.agents.push({ node: centerNode, angle: 0, type: 'ramp', life: 5, z: 1, dz: -1 / 5 });
+                chunk.agents.push({ node: centerNode, angle: _PI, type: 'ramp', life: 5, z: 1, dz: -1 / 5 });
             } else {
                 return null;
             }
@@ -1029,8 +1029,8 @@ export default function App() {
                             agent.hasSpawnedPerpendiculars = true;
                             agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'highway', life: 2400, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
                             agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'highway', life: 2400, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
-                            agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'ramp', life: 8, z: agent.z, dz: -agent.z/8, turnDir: 1 });
-                            agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'ramp', life: 8, z: agent.z, dz: -agent.z/8, turnDir: -1 });
+                            agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'ramp', life: 8, z: agent.z, dz: -agent.z / 8, turnDir: 1 });
+                            agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'ramp', life: 8, z: agent.z, dz: -agent.z / 8, turnDir: -1 });
                         }
                     }
 
@@ -1075,8 +1075,8 @@ export default function App() {
                         let cityNode = findNearestNode(chunk, nx, ny, 150, nextNode, zLevel);
                         if (cityNode && isInvalidRampConnection(chunk, cityNode)) cityNode = null;
                         if (cityNode) chunk.edges.push({ n1: nextNode, n2: cityNode, type: 'ramp', isBridge: false });
-                        agents.push({ node: nextNode, angle: agent.angle + _PI / 6, type: 'ramp', life: 10, z: agent.z, dz: -agent.z/10, turnDir: 1 });
-                        agents.push({ node: nextNode, angle: agent.angle - _PI / 6, type: 'ramp', life: 10, z: agent.z, dz: -agent.z/10, turnDir: -1 });
+                        agents.push({ node: nextNode, angle: agent.angle + _PI / 6, type: 'ramp', life: 10, z: agent.z, dz: -agent.z / 10, turnDir: 1 });
+                        agents.push({ node: nextNode, angle: agent.angle - _PI / 6, type: 'ramp', life: 10, z: agent.z, dz: -agent.z / 10, turnDir: -1 });
                     }
                     agent.wasBridge = isBridge;
 
@@ -1099,7 +1099,7 @@ export default function App() {
                             type: 'ramp',
                             life: 8,
                             z: agent.z,
-                            dz: -agent.z/8,
+                            dz: -agent.z / 8,
                             turnDir: tDir
                         });
                     }
