@@ -152,7 +152,7 @@ const fbmNoise = (x, y, scale = 0.003) => {
   return v;
 };
 
-const getTerrainType = (worldX, worldY, offset) => {
+const getTerrainType = (worldX, worldY, offset, world) => {
   const cx = Math.floor(worldX / CHUNK_SIZE);
   const cy = Math.floor(worldY / CHUNK_SIZE);
   const centerX = cx * CHUNK_SIZE + 600;
@@ -171,8 +171,8 @@ const getTerrainType = (worldX, worldY, offset) => {
 
   const val = fbmNoise(warpedX + offset, warpedY + offset);
 
-  const maxRadius = CHUNK_SIZE * 0.48;
-  const falloffStart = CHUNK_SIZE * 0.22;
+  const maxRadius = CHUNK_SIZE * 0.49;
+  const falloffStart = CHUNK_SIZE * 0.38;
 
   let finalVal = val;
   if (warpedDist > falloffStart) {
@@ -181,10 +181,34 @@ const getTerrainType = (worldX, worldY, offset) => {
     if (finalVal < WATER_LVL + 0.05) finalVal = WATER_LVL + 0.05;
   }
 
-  if (finalVal < WATER_LVL) return "WATER";
-  if (finalVal < CITY_LVL) return "CITY";
-  if (finalVal < SUBURB_LVL) return "SUBURB";
-  return "PARK";
+  let type;
+  if (finalVal < WATER_LVL) type = "WATER";
+  else if (finalVal < CITY_LVL) type = "CITY";
+  else if (finalVal < SUBURB_LVL) type = "SUBURB";
+  else type = "PARK";
+
+  if ((type === "CITY" || type === "SUBURB") && world && world.generatedChunks) {
+    const gx = Math.floor(worldX / 60);
+    const gy = Math.floor(worldY / 60);
+    const rCells = 3; // 180 radius
+    let nearRoad = false;
+    for (let i = gx - rCells; i <= gx + rCells; i++) {
+        for (let j = gy - rCells; j <= gy + rCells; j++) {
+            const cx = Math.floor((i * 60) / CHUNK_SIZE);
+            const cy = Math.floor((j * 60) / CHUNK_SIZE);
+            const key = `${cx},${cy}`;
+            let chunk = world.generatedChunks.get(key);
+            if (!chunk && world.activeChunk?.key === key) chunk = world.activeChunk;
+            if (chunk && chunk.roadGrid && chunk.roadGrid.has(`${i},${j}`)) {
+                nearRoad = true; break;
+            }
+        }
+        if (nearRoad) break;
+    }
+    if (!nearRoad) type = "PARK";
+  }
+
+  return type;
 };
 
 function buildMaterials(){
@@ -284,6 +308,18 @@ class InstancedChunkBuilder {
     this.extras.push(mesh);
   }
 
+  addPrism(w, h, d, mat, px, py, pz, ry = 0) {
+    this.dummy.scale.set(w, h, d);
+    this.dummy.position.set(px, py, pz);
+    this.dummy.rotation.set(0, ry, 0, "YXZ");
+    this.dummy.updateMatrix();
+    if (!this.prismInstances) this.prismInstances = new Map();
+    if (!this.prismInstances.has(mat)) {
+      this.prismInstances.set(mat, []);
+    }
+    this.prismInstances.get(mat).push(this.dummy.matrix.clone());
+  }
+
   build(group) {
     const geo = new THREE.BoxGeometry(1, 1, 1);
     for (const [mat, matrices] of this.instances.entries()) {
@@ -296,6 +332,21 @@ class InstancedChunkBuilder {
       mesh.receiveShadow = true;
       group.add(mesh);
     }
+
+    if (this.prismInstances) {
+      const prismGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 3);
+      for (const [mat, matrices] of this.prismInstances.entries()) {
+        const mesh = new THREE.InstancedMesh(prismGeo, mat, matrices.length);
+        for (let i = 0; i < matrices.length; i++) {
+          mesh.setMatrixAt(i, matrices[i]);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+    }
+
     for (const extra of this.extras) {
       extra.castShadow = true;
       extra.receiveShadow = true;
@@ -644,6 +695,12 @@ function buildBuilding(builder,b,mats,seed){
 
   if(b.type==="HOUSE"){
     const wallH=bh*0.65,roofH=bh*0.38;
+    if (b.isTriangle) {
+      const lx = bx, lz = bz;
+      builder.addPrism(bw, wallH, bd, mats.houseWall, lx, wallH/2, lz, -ang);
+      builder.addPrism(bw+0.4, roofH, bd+0.4, mats.houseRoof, lx, wallH+roofH/2, lz, -ang);
+      return;
+    }
     lbox(bw,wallH,bd,mats.houseWall,0,wallH/2,0);
     lbox(bw+0.4,roofH,bd+0.3,mats.houseRoof,0,wallH+roofH*0.42,0);
     
@@ -669,10 +726,29 @@ function buildBuilding(builder,b,mats,seed){
   const levels=bh>32?3:bh>16?2:1;
   
   for(let lvl=0;lvl<levels;lvl++){
-    const sh=0.18*lvl,lw=bw*(1-sh),ld=bd*(1-sh);
+    let lw=bw, ld=bd, lx_off=0, lz_off=0;
+    if (lvl > 0) {
+      if (bw >= 20 && H2(bx, bz, 14) > 0.5) {
+        // Asymmetric slender tower on a wide podium
+        lw = bw * (0.35 - lvl * 0.05);
+        ld = bd * (0.8 - lvl * 0.1);
+        lx_off = (bw / 2 - lw / 2 - 1.0) * (H2(bx, bz, lvl) > 0.5 ? 1 : -1);
+      } else {
+        // Standard setback
+        const sh=0.18*lvl;
+        lw=bw*(1-sh);
+        ld=bd*(1-sh);
+      }
+    }
+
     const botY=bh*(lvl/levels),topY=bh*((lvl+1)/levels),lh=topY-botY;
     
-    lbox(lw,lh,ld,tMat,0,botY+lh/2,0);
+    if (b.isTriangle) {
+      builder.addPrism(lw, lh, ld, tMat, bx, botY+lh/2, bz, -ang);
+      continue; 
+    }
+    
+    lbox(lw,lh,ld,tMat,lx_off,botY+lh/2,lz_off);
     
     const wRows=Math.max(1,Math.floor((lh-1.2)/3.2)),wCX=Math.max(1,Math.floor(lw/2.6)),wCZ=Math.max(1,Math.floor(ld/2.6));
     for(let r=0;r<wRows;r++){
@@ -681,33 +757,38 @@ function buildBuilding(builder,b,mats,seed){
       
       for(let c=0;c<wCX;c++){
         const lit=H2(bx*10+c,bz*10+r+lvl*100,5)>0.22,wm=lit?wMat:mats.winOff;
-        const lx=-lw/2+1.2+c*(lw/wCX);
-        const wfx=bx+cosA*lx-sinA*(ld/2+0.02),wfz=bz+sinA*lx+cosA*(ld/2+0.02);
-        const wbx=bx+cosA*lx-sinA*(-ld/2-0.02),wbz=bz+sinA*lx+cosA*(-ld/2-0.02);
+        const lx=-lw/2+1.2+c*(lw/wCX) + lx_off;
+        const wfx=bx+cosA*lx-sinA*(ld/2+0.02 + lz_off),wfz=bz+sinA*lx+cosA*(ld/2+0.02 + lz_off);
+        const wbx=bx+cosA*lx-sinA*(-ld/2-0.02 + lz_off),wbz=bz+sinA*lx+cosA*(-ld/2-0.02 + lz_off);
         
         builder.addBox(1.2,1.4,0.1,wm,wfx,wy,wfz,-ang);
         builder.addBox(1.2,1.4,0.1,wm,wbx,wy,wbz,-ang);
       }
       for(let c=0;c<wCZ;c++){
         const lit=H2(bx*10+c+50,bz*10+r+lvl*100+50,6)>0.22,wm=lit?wMat:mats.winOff;
-        const lz=-ld/2+1.2+c*(ld/wCZ);
-        const wlx=bx+cosA*(-lw/2-0.02)-sinA*lz,wlz=bz+sinA*(-lw/2-0.02)+cosA*lz;
-        const wrx=bx+cosA*(lw/2+0.02)-sinA*lz,wrz=bz+sinA*(lw/2+0.02)+cosA*lz;
+        const lz=-ld/2+1.2+c*(ld/wCZ) + lz_off;
+        const wlx=bx+cosA*(-lw/2-0.02 + lx_off)-sinA*lz,wlz=bz+sinA*(-lw/2-0.02 + lx_off)+cosA*lz;
+        const wrx=bx+cosA*(lw/2+0.02 + lx_off)-sinA*lz,wrz=bz+sinA*(lw/2+0.02 + lx_off)+cosA*lz;
         
         builder.addBox(0.1,1.4,1.2,wm,wlx,wy,wlz,-ang);
         builder.addBox(0.1,1.4,1.2,wm,wrx,wy,wrz,-ang);
       }
     }
     if(lvl<levels-1) {
-      lbox(lw+0.4,0.5,ld+0.4,mats.towerTop,0,topY+0.25,0);
+      lbox(lw+0.4,0.5,ld+0.4,mats.towerTop,lx_off,topY+0.25,lz_off);
     }
   }
   
   const topPlatformH = bh + 0.3;
-  lbox(bw*0.85,0.6,bd*0.85,mats.towerTop,0,topPlatformH,0);
+  // Get the last level's offsets and dimensions
+  const finalLw = bw >= 20 && H2(bx, bz, 14) > 0.5 && levels > 1 ? bw * (0.35 - (levels-1) * 0.05) : bw * (1 - 0.18 * (levels-1));
+  const finalLd = bw >= 20 && H2(bx, bz, 14) > 0.5 && levels > 1 ? bd * (0.8 - (levels-1) * 0.1) : bd * (1 - 0.18 * (levels-1));
+  const finalLxOff = bw >= 20 && H2(bx, bz, 14) > 0.5 && levels > 1 ? (bw / 2 - finalLw / 2 - 1.0) * (H2(bx, bz, levels-1) > 0.5 ? 1 : -1) : 0;
+  
+  lbox(finalLw*0.85,0.6,finalLd*0.85,mats.towerTop,finalLxOff,topPlatformH,0);
   
   if (H2(bx, bz, 30) > 0.5) {
-    lbox(bw*0.6, 0.08, bd*0.6, mats.whiteDiv, 0, topPlatformH + 0.32, 0);
+    lbox(finalLw*0.6, 0.08, finalLd*0.6, mats.whiteDiv, finalLxOff, topPlatformH + 0.32, 0);
   }
   
   const coolingUnitsCount = Math.floor(H2(bx, bz, 31) * 3) + 1;
@@ -789,7 +870,7 @@ function buildChunkGroup(chunk,mats,seed){
     for (let tx = 0; tx < TILE_RES; tx++) {
       const px = chunk.cx * CHUNK_SIZE + (tx + 0.5) * TILE_W;
       const pz = chunk.cy * CHUNK_SIZE + (tz + 0.5) * TILE_W;
-      const tType = getTerrainType(px, pz, seed);
+      const tType = getTerrainType(px, pz, seed, worldRef.current);
       
       if (tType === "WATER") {
         // Recessed water (Y=-0.7, thickness=0.2)

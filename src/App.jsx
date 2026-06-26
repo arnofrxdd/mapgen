@@ -175,6 +175,17 @@ const T_CITY = 'CITY';
 const T_SUBURB = 'SUBURB';
 const T_PARK = 'PARK';
 
+const getGridAngle = (x, y, seedOffset) => {
+    // Low frequency noise to create large coherent zones
+    const scale = 0.0003; 
+    const v = smoothNoise((x + seedOffset) * scale, (y + seedOffset) * scale);
+    
+    // Divide into 3 distinct zones for different angles
+    if (v < 0.35) return 0;           // Standard Manhattan
+    if (v > 0.65) return _PI_4;       // 45 degrees
+    return -_PI_4;                    // -45 degrees
+};
+
 export default function App() {
     const canvasRef = useRef(null);
     const wrapperRef = useRef(null);
@@ -259,8 +270,8 @@ export default function App() {
 
         const val = fbm(warpedX + offset, warpedY + offset);
 
-        const maxRadius = CHUNK_SIZE * 0.48;
-        const falloffStart = CHUNK_SIZE * 0.22;
+        const maxRadius = CHUNK_SIZE * 0.49;
+        const falloffStart = CHUNK_SIZE * 0.38;
 
         let finalVal = val;
         if (warpedDist > falloffStart) {
@@ -288,11 +299,30 @@ export default function App() {
         const id = node.id;
         for (let i = 0; i < edges.length; i++) {
             const e = edges[i];
-            if (e.n1.id === id || e.n2.id === id) {
-                if (e.type === 'alley' || e.type === 'park_path') return true;
-            }
+            if ((e.n1.id === id || e.n2.id === id) && e.type !== 'highway' && e.type !== 'causeway') return true;
         }
         return false;
+    };
+
+    const isValidAngle = (chunk, n1, n2) => {
+        const checkNode = (node, targetNode) => {
+            const angle = _atan2(targetNode.y - node.y, targetNode.x - node.x);
+            for (let i = 0; i < chunk.edges.length; i++) {
+                const e = chunk.edges[i];
+                let eAngle = null;
+                if (e.n1 === node) eAngle = _atan2(e.n2.y - e.n1.y, e.n2.x - e.n1.x);
+                else if (e.n2 === node) eAngle = _atan2(e.n1.y - e.n2.y, e.n1.x - e.n2.x);
+
+                if (eAngle !== null) {
+                    let diff = _abs(angle - eAngle);
+                    while (diff > _PI) diff -= _PI2;
+                    diff = _abs(diff);
+                    if (diff < 0.35) return false; // 20 degrees
+                }
+            }
+            return true;
+        };
+        return checkNode(n1, n2) && checkNode(n2, n1);
     };
 
     const isRampNode = (chunk, node) => {
@@ -451,21 +481,46 @@ export default function App() {
         return chunk;
     };
 
+    const getVisualTerrain = (world, worldX, worldY, offset) => {
+        let type = getTerrain(worldX, worldY, offset);
+        if (type === T_CITY || type === T_SUBURB) {
+            const gx = _floor(worldX / 60);
+            const gy = _floor(worldY / 60);
+            const rCells = 3; // 180 units radius
+            let nearRoad = false;
+            for (let i = gx - rCells; i <= gx + rCells; i++) {
+                for (let j = gy - rCells; j <= gy + rCells; j++) {
+                    const cx = _floor((i * 60) / CHUNK_SIZE);
+                    const cy = _floor((j * 60) / CHUNK_SIZE);
+                    const key = `${cx},${cy}`;
+                    let chunk = world.generatedChunks.get(key);
+                    if (!chunk && world.activeChunk?.key === key) chunk = world.activeChunk;
+                    if (chunk && chunk.roadGrid && chunk.roadGrid.has(`${i},${j}`)) {
+                        nearRoad = true; break;
+                    }
+                }
+                if (nearRoad) break;
+            }
+            if (!nearRoad) type = T_PARK;
+        }
+        return type;
+    };
+
     const generateChunkTerrain = (cx, cy) => {
         const offset = worldRef.current.seedOffset;
         const tCanvas = document.createElement('canvas');
-        tCanvas.width = CHUNK_SIZE;
-        tCanvas.height = CHUNK_SIZE;
+        tCanvas.width = CHUNK_SIZE; tCanvas.height = CHUNK_SIZE;
         const tCtx = tCanvas.getContext('2d');
         const imgData = tCtx.createImageData(CHUNK_SIZE, CHUNK_SIZE);
         const data = imgData.data;
 
         const STEP = 4;
+        const world = worldRef.current;
         for (let y = 0; y < CHUNK_SIZE; y += STEP) {
             for (let x = 0; x < CHUNK_SIZE; x += STEP) {
                 const worldX = cx * CHUNK_SIZE + x;
                 const worldY = cy * CHUNK_SIZE + y;
-                const type = getTerrain(worldX, worldY, offset);
+                const type = getVisualTerrain(world, worldX, worldY, offset);
 
                 let r, g, b;
                 if (type === T_WATER) { r = 186; g = 230; b = 253; }
@@ -535,6 +590,12 @@ export default function App() {
             let currentT = 1;
             const endT = len - 1;
 
+            // Pre-select uniform depth for the entire block face to ensure buildings line up flush like real city blocks
+            const cityDepthOptions = [10, 14, 18, 22];
+            const edgeCityDepth = cityDepthOptions[_floor(_random() * cityDepthOptions.length)];
+            const suburbDepthOptions = [6, 8, 10];
+            const edgeSuburbDepth = suburbDepthOptions[_floor(_random() * suburbDepthOptions.length)];
+
             while (currentT < endT - 1) {
                 const sampleX = edge.n1.x + (dx * invLen) * currentT + nx * dir * 15;
                 const sampleY = edge.n1.y + (dy * invLen) * currentT + ny * dir * 15;
@@ -544,17 +605,16 @@ export default function App() {
                 let bWidth, bDepth, gap, type;
                 if (terrain === T_WATER) { currentT += 5; continue; }
                 else if (terrain === T_CITY) {
-                    const ws = [4, 5, 6, 8];
-                    const ds = [4, 5, 6, 8, 10];
+                    const ws = [12, 16, 20, 24, 30, 40]; // Much wider variations
                     bWidth = ws[_floor(_random() * ws.length)];
-                    bDepth = ds[_floor(_random() * ds.length)];
-                    gap = 0.05;
+                    bDepth = edgeCityDepth; // Uniform block depth
+                    gap = _random() < 0.6 ? 0.0 : 0.5; // 60% chance for seamless connection (0.0 gap)
                     type = _random() < 0.15 ? 'PARKING_LOT' : 'COMMERCIAL';
                 } else if (terrain === T_SUBURB) {
-                    const ws = [3, 4, 5];
+                    const ws = [8, 10, 12, 16];
                     bWidth = ws[_floor(_random() * ws.length)];
-                    bDepth = ws[_floor(_random() * ws.length)];
-                    gap = 0.5;
+                    bDepth = edgeSuburbDepth; // Uniform block depth
+                    gap = _random() < 0.4 ? 0.0 : 0.5; // Attached townhouses sometimes
                     type = 'HOUSE';
                 } else {
                     bWidth = 2.5; bDepth = 2.5; gap = 2.5;
@@ -562,7 +622,7 @@ export default function App() {
                 }
 
                 if (currentT + bWidth > endT) bWidth = endT - currentT;
-                if (bWidth < 2) { currentT += 1; continue; }
+                if (bWidth < 5) { currentT += 1; continue; }
 
                 const distToCenter = roadHalfWidth + sidewalk + (bDepth * 0.5);
                 const bx = edge.n1.x + (dx * invLen) * (currentT + bWidth * 0.5) + nx * dir * distToCenter;
@@ -627,6 +687,33 @@ export default function App() {
                         if (obbVsObb(part, nearbyBuildings[bi], pad)) { overlap = true; break; }
                     }
                     if (overlap) break;
+                }
+
+                if (overlap && (type === 'COMMERCIAL' || type === 'HOUSE')) {
+                    // Try to fit a triangular building in the tight space
+                    const triPart = { ...basePart, w: bWidth * 0.6, h: bDepth * 0.6, isTriangle: true };
+                    let triOverlap = false;
+                    const nearbyEdges = getNearbyEdges(chunk, triPart);
+                    for (let ei = 0; ei < nearbyEdges.length; ei++) {
+                        const e = nearbyEdges[ei];
+                        let hw = 1.5 + sidewalk;
+                        if (e.type === 'highway') hw = 3 + sidewalk;
+                        else if (e.type === 'park_path') hw = 0.5 + sidewalk;
+                        else if (e.type === 'alley') hw = 0.5;
+                        const rObb = roadSegmentToObb(e.n1.x, e.n1.y, e.n2.x, e.n2.y, hw);
+                        if (rObb && obbVsObb(triPart, rObb, 0)) { triOverlap = true; break; }
+                    }
+                    if (!triOverlap) {
+                        const nearbyBuildings = getNearbyBuildings(chunk, triPart);
+                        for (let bi = 0; bi < nearbyBuildings.length; bi++) {
+                            if (obbVsObb(triPart, nearbyBuildings[bi], 0.1)) { triOverlap = true; break; }
+                        }
+                    }
+                    if (!triOverlap) {
+                        overlap = false;
+                        generatedParts.length = 0;
+                        generatedParts.push(triPart);
+                    }
                 }
 
                 if (!overlap) {
@@ -705,6 +792,16 @@ export default function App() {
                 }
 
                 const stepAmount = agent.type === 'alley' ? ALLEY_STEP : STEP_SIZE;
+                
+                if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'alley' || agent.type === 'highway') {
+                    const localGrid = getGridAngle(agent.node.x, agent.node.y, seedOffset);
+                    let diff = agent.angle - localGrid;
+                    while (diff > _PI) diff -= _PI2;
+                    while (diff < -_PI) diff += _PI2;
+                    const snappedDiff = Math.round(diff / _PI_2) * _PI_2;
+                    agent.angle = localGrid + snappedDiff;
+                }
+
                 let nx = agent.node.x + _cos(agent.angle) * stepAmount;
                 let ny = agent.node.y + _sin(agent.angle) * stepAmount;
 
@@ -748,43 +845,53 @@ export default function App() {
                     agent.type = 'street';
                 }
 
-                if (!forceMerge && nextTerrain === T_WATER) {
-                    if (agent.type === 'ramp') { agents.splice(idx, 1); continue; }
-                    else if (agent.type === 'highway' || agent.type === 'causeway') { isBridge = true; agent.wasBridge = true; }
-                    else if (agent.type === 'alley') { forceMerge = true; }
-                    else if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'coast' || agent.type === 'park_path') {
+                if (!forceMerge && (agent.type === 'street' || agent.type === 'suburb_road')) {
+                    const isNearWater = (
+                        getTerrain(nx + 45, ny, seedOffset) === T_WATER ||
+                        getTerrain(nx - 45, ny, seedOffset) === T_WATER ||
+                        getTerrain(nx, ny + 45, seedOffset) === T_WATER ||
+                        getTerrain(nx, ny - 45, seedOffset) === T_WATER
+                    );
+                    if (isNearWater || nextTerrain === T_WATER) {
                         let hitLand = false, hasCity = false;
-                        if (agent.type === 'street' || agent.type === 'suburb_road') {
-                            const cosA = _cos(agent.angle), sinA = _sin(agent.angle);
-                            for (let i = 1; i <= 180; i++) {
-                                const rx = agent.node.x + cosA * (STEP_SIZE * i);
-                                const ry = agent.node.y + sinA * (STEP_SIZE * i);
-                                if (rx < minX || rx >= maxX || ry < minY || ry >= maxY) break;
-                                const terrain = getTerrain(rx, ry, seedOffset);
-                                if (terrain !== T_WATER) {
-                                    hitLand = true;
-                                    if (terrain === T_CITY || terrain === T_SUBURB) hasCity = true;
-                                    break;
-                                }
+                        const cosA = _cos(agent.angle), sinA = _sin(agent.angle);
+                        for (let i = 1; i <= 250; i++) { 
+                            const rx = agent.node.x + cosA * (STEP_SIZE * i);
+                            const ry = agent.node.y + sinA * (STEP_SIZE * i);
+                            if (rx < minX || rx >= maxX || ry < minY || ry >= maxY) break;
+                            const terrain = getTerrain(rx, ry, seedOffset);
+                            if (terrain !== T_WATER) {
+                                hitLand = true;
+                                if (terrain === T_CITY || terrain === T_SUBURB) hasCity = true;
+                                break;
                             }
                         }
                         if (hitLand && hasCity) {
                             let alreadyExists = false;
                             const ct = chunk.causewayTargets;
-                            const anx = agent.node.x, any = agent.node.y;
                             for (let ci = 0; ci < ct.length; ci++) {
-                                const cdx = ct[ci].x - anx, cdy = ct[ci].y - any;
-                                if (cdx * cdx + cdy * cdy < 14400) { alreadyExists = true; break; } // 120^2
+                                const cdx = ct[ci].x - agent.node.x, cdy = ct[ci].y - agent.node.y;
+                                if (cdx * cdx + cdy * cdy < 22500) { alreadyExists = true; break; } 
                             }
                             if (!alreadyExists) {
-                                ct.push({ x: anx, y: any });
-                                agents.push({ node: agent.node, angle: agent.angle, type: 'causeway', life: 100, z: 0, wasBridge: true });
+                                ct.push({ x: agent.node.x, y: agent.node.y });
+                                agents.push({ node: agent.node, angle: agent.angle, type: 'causeway', life: 150, z: 0, wasBridge: true });
                             }
                             forceMerge = true;
-                        } else {
-                            agent.type = 'coast';
-                            const eps = 2;
-                            const sx = agent.node.x + seedOffset, sy = agent.node.y + seedOffset;
+                        } else if (isNearWater && nextTerrain !== T_WATER) {
+                            forceMerge = true;
+                        }
+                    }
+                }
+
+                if (!forceMerge && nextTerrain === T_WATER) {
+                    if (agent.type === 'ramp') { agents.splice(idx, 1); continue; }
+                    else if (agent.type === 'highway' || agent.type === 'causeway') { isBridge = true; agent.wasBridge = true; }
+                    else if (agent.type === 'alley') { forceMerge = true; }
+                    else if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'coast' || agent.type === 'park_path') {
+                        agent.type = 'coast';
+                        const eps = 2;
+                        const sx = agent.node.x + seedOffset, sy = agent.node.y + seedOffset;
                             const vRight = fbm(sx + eps, sy);
                             const vTop = fbm(sx, sy + eps);
                             const vCenter = fbm(sx, sy);
@@ -798,7 +905,6 @@ export default function App() {
                             ny = agent.node.y + _sin(agent.angle) * (STEP_SIZE * 0.8);
                             if (getTerrain(nx, ny, seedOffset) === T_WATER || nx < minX || nx > maxX || ny < minY || ny > maxY) forceMerge = true;
                             else agent.life = _max(agent.life, 30);
-                        }
                     }
                 } else if (!forceMerge && nextTerrain === T_PARK) {
                     if (agent.type === 'street' || agent.type === 'suburb_road') agent.type = 'park_path';
@@ -810,7 +916,7 @@ export default function App() {
                 const zLevel = agent.z || 0;
 
                 if (forceMerge) {
-                    const mergeDist = agent.type === 'alley' ? 40 : agent.type === 'ramp' ? 80 : 300;
+                    const mergeDist = agent.type === 'alley' ? 40 : agent.type === 'ramp' ? 80 : (agent.type === 'highway' || agent.type === 'causeway' ? 300 : 45);
                     let target = findNearestNode(chunk, agent.node.x, agent.node.y, mergeDist, agent.node, zLevel);
 
                     if (target && agent.type === 'ramp') {
@@ -821,7 +927,9 @@ export default function App() {
                         if (isRampNode(chunk, target)) target = null;
                     }
                     if (target && (agent.type === 'highway' || agent.type === 'causeway' || !checkWaterCrossing(agent.node, target, seedOffset))) {
-                        chunk.edges.push({ n1: agent.node, n2: target, type: agent.type, isBridge: (agent.type === 'highway' || agent.type === 'causeway') ? isBridge : false });
+                        if (isValidAngle(chunk, agent.node, target)) {
+                            chunk.edges.push({ n1: agent.node, n2: target, type: agent.type, isBridge: (agent.type === 'highway' || agent.type === 'causeway') ? isBridge : false });
+                        }
                     }
                     agents.splice(idx, 1);
                     continue;
@@ -842,6 +950,10 @@ export default function App() {
                 }
 
                 const nextNode = nearbyNode || addNode(chunk, nx, ny, zLevel);
+                if (!isValidAngle(chunk, agent.node, nextNode)) {
+                    agents.splice(idx, 1);
+                    continue;
+                }
                 chunk.edges.push({ n1: agent.node, n2: nextNode, type: agent.type, isBridge: (agent.type === 'highway' || agent.type === 'causeway') ? isBridge : false });
                 if (nearbyNode) { agents.splice(idx, 1); continue; }
 
@@ -897,11 +1009,12 @@ export default function App() {
                 } else if (agent.type === 'ramp') {
                     agent.angle += (_random() - 0.5) * 0.1;
                 } else if (agent.type === 'street' || agent.type === 'suburb_road') {
-                    if (_random() < 0.1) agent.angle += (_random() > 0.5 ? _PI_4 : -_PI_4);
-                    if (_random() < 0.45) {
-                        agents.push({ node: nextNode, angle: agent.angle + (_random() > 0.5 ? _PI_2 : -_PI_2), type: agent.type, life: 80, z: 0 });
+                    // if (_random() < 0.1) agent.angle += (_random() > 0.5 ? _PI_4 : -_PI_4);
+                    // Adjusted branching probability for a balance of cuts and block lengths
+                    if (_random() < 0.15) {
+                        agents.push({ node: nextNode, angle: agent.angle + (_random() > 0.5 ? _PI_2 : -_PI_2), type: agent.type, life: 100, z: 0 });
                     }
-                    if (_random() < 0.15 && nextTerrain === T_CITY) {
+                    if (_random() < 0.05 && nextTerrain === T_CITY) {
                         agents.push({ node: nextNode, angle: agent.angle + (_random() > 0.5 ? _PI_2 : -_PI_2), type: 'alley', life: 25, z: 0 });
                     }
                 } else if (agent.type === 'alley' || agent.type === 'coast') {
@@ -1029,6 +1142,7 @@ export default function App() {
             world.globalStats.parking += pk;
             world.globalStats.buildings += (chunk.buildings.length - pk);
             world.activeChunk = null;
+            world.terrainCache.delete(chunk.key); // Invalidate cache so it redraws with correct city borders
         }
     }, []);
 
