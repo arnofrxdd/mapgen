@@ -841,7 +841,7 @@ function buildFence(builder,f,mats){
   }
 }
 
-function buildChunkGroup(chunk,mats,seed){
+function buildChunkGroup(chunk,mats,seed,world){
   const group=new THREE.Group();
   
   let edgeId = 0;
@@ -870,7 +870,7 @@ function buildChunkGroup(chunk,mats,seed){
     for (let tx = 0; tx < TILE_RES; tx++) {
       const px = chunk.cx * CHUNK_SIZE + (tx + 0.5) * TILE_W;
       const pz = chunk.cy * CHUNK_SIZE + (tz + 0.5) * TILE_W;
-      const tType = getTerrainType(px, pz, seed, worldRef.current);
+      const tType = getTerrainType(px, pz, seed, world);
       
       if (tType === "WATER") {
         // Recessed water (Y=-0.7, thickness=0.2)
@@ -986,7 +986,7 @@ export default function VoxelView({worldRef,onClose}){
         const dcy = Math.abs(chunk.cy - camChunkZ);
         if (dcx <= renderDistance && dcy <= renderDistance) {
           if(!builtChunks.has(key)){
-            const g=buildChunkGroup(chunk,mats,seed);
+            const g=buildChunkGroup(chunk,mats,seed,world);
             scene.add(g);
             builtChunks.set(key,g);
           }
