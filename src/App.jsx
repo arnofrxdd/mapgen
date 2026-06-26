@@ -35,12 +35,23 @@ const smoothNoise = (x, y) => {
     return i1 + (i2 - i1) * fy;
 };
 
-const fbm = (x, y, scale = 0.003) => {
+const fbm = (x, y, scale = 0.0015) => {
     let v = 0, amp = 0.5, f = scale;
-    v += smoothNoise(x * f, y * f) * amp; f *= 2; amp *= 0.5;
-    v += smoothNoise(x * f, y * f) * amp; f *= 2; amp *= 0.5;
-    v += smoothNoise(x * f, y * f) * amp; f *= 2; amp *= 0.5;
+
     v += smoothNoise(x * f, y * f) * amp;
+    f *= 2;
+    amp *= 0.5;
+
+    v += smoothNoise(x * f, y * f) * amp;
+    f *= 2;
+    amp *= 0.5;
+
+    v += smoothNoise(x * f, y * f) * amp;
+    f *= 2;
+    amp *= 0.5;
+
+    v += smoothNoise(x * f, y * f) * amp;
+
     return v;
 };
 
@@ -152,13 +163,16 @@ const lineIntersect = (p0_x, p0_y, p1_x, p1_y, p2_x, p2_y, p3_x, p3_y) => {
 
 // --- Constants & Config ---
 const CHUNK_SIZE = 1200;
-const STEP_SIZE = 15;
-const ALLEY_STEP = 10;
-const MERGE_RADIUS = 12;
+const STEP_SIZE = 22;
+const ALLEY_STEP = 14;
+const MERGE_RADIUS = 22;
 const GROWTH_SPEED = 20;
-const CELL_SIZE = 30;
+const CELL_SIZE = 40;
 const BLDG_CELL = 32;
 const ROAD_CELL = 100;
+
+// I added ts to control long road probability
+const LONG_ROAD_BIAS = 1.35;
 
 const WATER_LVL = 0.35;
 const CITY_LVL = 0.52;
@@ -177,9 +191,9 @@ const T_PARK = 'PARK';
 
 const getGridAngle = (x, y, seedOffset) => {
     // Low frequency noise to create large coherent zones
-    const scale = 0.0003; 
+    const scale = 0.00015;
     const v = smoothNoise((x + seedOffset) * scale, (y + seedOffset) * scale);
-    
+
     // Divide into 3 distinct zones for different angles
     if (v < 0.35) return 0;           // Standard Manhattan
     if (v > 0.65) return _PI_4;       // 45 degrees
@@ -470,7 +484,7 @@ export default function App() {
                 const centerX = 600, centerY = 600; // cx=0,cy=0 so CHUNK_SIZE/2
                 const centerNode = addNode(chunk, centerX, centerY, 1);
                 for (let i = 0; i < 4; i++) {
-                    chunk.agents.push({ node: centerNode, angle: i * _PI_2, type: 'highway', life: 1800, z: 1, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
+                    chunk.agents.push({ node: centerNode, angle: i * _PI_2, type: 'highway', life: 2400, z: 1, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
                 }
                 chunk.agents.push({ node: centerNode, angle: 0, type: 'ramp', life: 5, z: 1, dz: -1/5 });
                 chunk.agents.push({ node: centerNode, angle: _PI, type: 'ramp', life: 5, z: 1, dz: -1/5 });
@@ -648,7 +662,7 @@ export default function App() {
                     const startLY = -((rows - 1) * 3) * 0.5;
                     for (let r = 0; r < rows; r++) {
                         for (let c = 0; c < cols; c++) {
-                            if (_random() < 0.6) {
+                            if (_random() < 0.85) {
                                 cars.push({
                                     lx: startLX + c * 2.5, ly: startLY + r * 3,
                                     color: ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#94a3b8', '#ffffff'][_floor(_random() * 6)]
@@ -808,7 +822,7 @@ export default function App() {
                         if (!nearest) {
                             const newNode = addNode(chunk, rx, ry, 0);
                             for (let i = 0; i < 4; i++) {
-                                agents.push({ node: newNode, angle: i * _PI_2, type: 'street', life: 120, z: 0 });
+                                agents.push({ node: newNode, angle: i * _PI_2, type: 'street', life: Math.floor(160 * LONG_ROAD_BIAS), z: 0 });
                             }
                         }
                     }
@@ -835,7 +849,7 @@ export default function App() {
                 }
 
                 const stepAmount = agent.type === 'alley' ? ALLEY_STEP : STEP_SIZE;
-                
+
                 if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'alley' || agent.type === 'highway') {
                     const localGrid = getGridAngle(agent.node.x, agent.node.y, seedOffset);
                     let diff = agent.angle - localGrid;
@@ -898,7 +912,7 @@ export default function App() {
                     if (isNearWater || nextTerrain === T_WATER) {
                         let hitLand = false, hasCity = false;
                         const cosA = _cos(agent.angle), sinA = _sin(agent.angle);
-                        for (let i = 1; i <= 250; i++) { 
+                        for (let i = 1; i <= 250; i++) {
                             const rx = agent.node.x + cosA * (STEP_SIZE * i);
                             const ry = agent.node.y + sinA * (STEP_SIZE * i);
                             if (rx < minX || rx >= maxX || ry < minY || ry >= maxY) break;
@@ -914,7 +928,7 @@ export default function App() {
                             const ct = chunk.causewayTargets;
                             for (let ci = 0; ci < ct.length; ci++) {
                                 const cdx = ct[ci].x - agent.node.x, cdy = ct[ci].y - agent.node.y;
-                                if (cdx * cdx + cdy * cdy < 22500) { alreadyExists = true; break; } 
+                                if (cdx * cdx + cdy * cdy < 22500) { alreadyExists = true; break; }
                             }
                             if (!alreadyExists) {
                                 ct.push({ x: agent.node.x, y: agent.node.y });
@@ -935,19 +949,19 @@ export default function App() {
                         agent.type = 'coast';
                         const eps = 2;
                         const sx = agent.node.x + seedOffset, sy = agent.node.y + seedOffset;
-                            const vRight = fbm(sx + eps, sy);
-                            const vTop = fbm(sx, sy + eps);
-                            const vCenter = fbm(sx, sy);
-                            let coastAngle = _atan2(-(vRight - vCenter), vTop - vCenter);
-                            let diff = coastAngle - agent.angle;
-                            while (diff <= -_PI) diff += _PI2;
-                            while (diff > _PI) diff -= _PI2;
-                            if (_abs(diff) > _PI_2) coastAngle += _PI;
-                            agent.angle = coastAngle;
-                            nx = agent.node.x + _cos(agent.angle) * (STEP_SIZE * 0.8);
-                            ny = agent.node.y + _sin(agent.angle) * (STEP_SIZE * 0.8);
-                            if (getTerrain(nx, ny, seedOffset) === T_WATER || nx < minX || nx > maxX || ny < minY || ny > maxY) forceMerge = true;
-                            else agent.life = _max(agent.life, 30);
+                        const vRight = fbm(sx + eps, sy);
+                        const vTop = fbm(sx, sy + eps);
+                        const vCenter = fbm(sx, sy);
+                        let coastAngle = _atan2(-(vRight - vCenter), vTop - vCenter);
+                        let diff = coastAngle - agent.angle;
+                        while (diff <= -_PI) diff += _PI2;
+                        while (diff > _PI) diff -= _PI2;
+                        if (_abs(diff) > _PI_2) coastAngle += _PI;
+                        agent.angle = coastAngle;
+                        nx = agent.node.x + _cos(agent.angle) * (STEP_SIZE * 0.8);
+                        ny = agent.node.y + _sin(agent.angle) * (STEP_SIZE * 0.8);
+                        if (getTerrain(nx, ny, seedOffset) === T_WATER || nx < minX || nx > maxX || ny < minY || ny > maxY) forceMerge = true;
+                        else agent.life = _max(agent.life, 30);
                     }
                 } else if (!forceMerge && nextTerrain === T_PARK) {
                     if (agent.type === 'alley') forceMerge = true;
@@ -974,7 +988,7 @@ export default function App() {
                         }
                     } else if (!target && agent.type === 'ramp') {
                         // If ramp ends in the middle of nowhere, spawn a street to build a new neighborhood!
-                        agents.push({ node: agent.node, angle: agent.angle, type: 'street', life: 60, z: 0 });
+                        agents.push({ node: agent.node, angle: agent.angle, type: 'street', life: Math.floor(60 * LONG_ROAD_BIAS), z: 0 });
                     }
                     agents.splice(idx, 1);
                     continue;
@@ -1013,17 +1027,34 @@ export default function App() {
 
                         if (distToCenter < STEP_SIZE * 2) {
                             agent.hasSpawnedPerpendiculars = true;
-                            agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'highway', life: 1800, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
-                            agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'highway', life: 1800, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
+                            agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'highway', life: 2400, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
+                            agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'highway', life: 2400, z: agent.z, wasBridge: false, isCardinal: true, hasSpawnedPerpendiculars: true });
                             agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'ramp', life: 8, z: agent.z, dz: -agent.z/8, turnDir: 1 });
                             agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'ramp', life: 8, z: agent.z, dz: -agent.z/8, turnDir: -1 });
                         }
                     }
 
                     if (agent.isCardinal) {
-                        if (!isBridge && _random() < 0.05) {
+                        const isDenseArea =
+                            getTerrain(nextNode.x + 80, nextNode.y, seedOffset) !== T_WATER &&
+                            getTerrain(nextNode.x - 80, nextNode.y, seedOffset) !== T_WATER &&
+                            getTerrain(nextNode.x, nextNode.y + 80, seedOffset) !== T_WATER &&
+                            getTerrain(nextNode.x, nextNode.y - 80, seedOffset) !== T_WATER;
+
+                        if (
+                            !isBridge &&
+                            isDenseArea &&
+                            _random() < 0.07
+                        ) {
                             const tDir = _random() > 0.5 ? 1 : -1;
-                            agents.push({ node: nextNode, angle: agent.angle + tDir * _PI_4, type: 'ramp', life: 8, z: 0, turnDir: tDir });
+                            agents.push({
+                                node: nextNode,
+                                angle: agent.angle + tDir * _PI_4,
+                                type: 'ramp',
+                                life: 8,
+                                z: 0,
+                                turnDir: tDir
+                            });
                         }
                     } else {
                         agent.angle += (_random() - 0.5) * (isBridge ? 0.0 : 0.3);
@@ -1049,9 +1080,28 @@ export default function App() {
                     }
                     agent.wasBridge = isBridge;
 
-                    if (!isBridge && !agent.isCardinal && _random() < 0.25) {
+                    const isDenseArea =
+                        getTerrain(nextNode.x + 80, nextNode.y, seedOffset) !== T_WATER &&
+                        getTerrain(nextNode.x - 80, nextNode.y, seedOffset) !== T_WATER &&
+                        getTerrain(nextNode.x, nextNode.y + 80, seedOffset) !== T_WATER &&
+                        getTerrain(nextNode.x, nextNode.y - 80, seedOffset) !== T_WATER;
+
+                    if (
+                        !isBridge &&
+                        !agent.isCardinal &&
+                        isDenseArea &&
+                        _random() < 0.10
+                    ) {
                         const tDir = _random() > 0.5 ? 1 : -1;
-                        agents.push({ node: nextNode, angle: agent.angle + tDir * _PI_4, type: 'ramp', life: 8, z: agent.z, dz: -agent.z/8, turnDir: tDir });
+                        agents.push({
+                            node: nextNode,
+                            angle: agent.angle + tDir * _PI_4,
+                            type: 'ramp',
+                            life: 8,
+                            z: agent.z,
+                            dz: -agent.z/8,
+                            turnDir: tDir
+                        });
                     }
                 } else if (agent.type === 'ramp') {
                     agent.angle += (agent.turnDir || (_random() > 0.5 ? 1 : -1)) * 0.18;
@@ -1060,9 +1110,9 @@ export default function App() {
                     // if (_random() < 0.1) agent.angle += (_random() > 0.5 ? _PI_4 : -_PI_4);
                     // Adjusted branching probability for a balance of cuts and block lengths
                     if (_random() < 0.15) {
-                        agents.push({ node: nextNode, angle: agent.angle + (_random() > 0.5 ? _PI_2 : -_PI_2), type: agent.type, life: 100, z: 0 });
+                        agents.push({ node: nextNode, angle: agent.angle + (_random() > 0.5 ? _PI_2 : -_PI_2), type: agent.type, life: Math.floor(100 * LONG_ROAD_BIAS), z: 0 });
                     }
-                    if (_random() < 0.05 && nextTerrain === T_CITY) {
+                    if (_random() < 0.07 && nextTerrain === T_CITY) {
                         agents.push({ node: nextNode, angle: agent.angle + (_random() > 0.5 ? _PI_2 : -_PI_2), type: 'alley', life: 25, z: 0 });
                     }
                 } else if (agent.type === 'alley' || agent.type === 'coast') {
@@ -1111,7 +1161,7 @@ export default function App() {
                         if (node && node.z === 0) nodesToReplace.push(node);
                     }
                 }
-                
+
                 nodesToReplace.forEach(centerNode => {
                     const connectedEdges = cEdges.filter(e => e.n1 === centerNode || e.n2 === centerNode);
                     if (connectedEdges.length < 3) return;
@@ -1129,14 +1179,14 @@ export default function App() {
                         const item = sortedEdges[i];
                         const dx = item.otherNode.x - centerNode.x;
                         const dy = item.otherNode.y - centerNode.y;
-                        const dist = _sqrt(dx*dx + dy*dy);
+                        const dist = _sqrt(dx * dx + dy * dy);
                         if (dist < 40) return; // Too short to make a roundabout
-                        
+
                         const rx = centerNode.x + (dx / dist) * radius;
                         const ry = centerNode.y + (dy / dist) * radius;
                         const rn = addNode(chunk, rx, ry, 0);
                         rNodes.push(rn);
-                        
+
                         if (item.e.n1 === centerNode) item.e.n1 = rn;
                         else item.e.n2 = rn;
                     }
@@ -1497,123 +1547,123 @@ export default function App() {
 
     return (
         <>
-        <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-800 select-none">
-            <div className="flex flex-wrap items-center justify-between p-4 bg-white border-b border-slate-200 z-10 relative shrink-0 shadow-sm gap-4">
-                <div>
-                    <h1 className="text-lg font-semibold text-slate-800 tracking-tight">Procedural City Plan</h1>
-                    <div className="flex flex-col gap-1.5 mt-1.5 text-xs text-slate-500">
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 items-center">
-                            <span className="font-semibold text-slate-700 mr-1">Roads:</span>
-                            <span className="flex items-center gap-1.5"><span className="inline-flex items-center justify-center w-5 h-2.5 rounded border border-[#0f172a] bg-[#f59e0b]"></span>Highway / Bridge</span>
-                            <span className="flex items-center gap-1.5"><span className="inline-flex items-center justify-center w-5 h-2.5 rounded border border-[#78350f] bg-[#d97706]"></span>Causeway</span>
-                            <span className="flex items-center gap-1.5"><span className="inline-flex items-center justify-center w-5 h-2.5 rounded border border-[#1e293b] bg-[#ffffff]"></span>Main Street</span>
-                            <span className="flex items-center gap-1.5"><span className="inline-flex items-center justify-center w-5 h-2.5 rounded border border-[#334155] bg-[#cbd5e1]"></span>Suburb Road</span>
-                            <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 border-t border-dashed border-[#475569]"></span>Alley</span>
-                            <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 border-t border-dashed border-[#059669]"></span>Park Trail</span>
+            <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-800 select-none">
+                <div className="flex flex-wrap items-center justify-between p-4 bg-white border-b border-slate-200 z-10 relative shrink-0 shadow-sm gap-4">
+                    <div>
+                        <h1 className="text-lg font-semibold text-slate-800 tracking-tight">Procedural City Plan</h1>
+                        <div className="flex flex-col gap-1.5 mt-1.5 text-xs text-slate-500">
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 items-center">
+                                <span className="font-semibold text-slate-700 mr-1">Roads:</span>
+                                <span className="flex items-center gap-1.5"><span className="inline-flex items-center justify-center w-5 h-2.5 rounded border border-[#0f172a] bg-[#f59e0b]"></span>Highway / Bridge</span>
+                                <span className="flex items-center gap-1.5"><span className="inline-flex items-center justify-center w-5 h-2.5 rounded border border-[#78350f] bg-[#d97706]"></span>Causeway</span>
+                                <span className="flex items-center gap-1.5"><span className="inline-flex items-center justify-center w-5 h-2.5 rounded border border-[#1e293b] bg-[#ffffff]"></span>Main Street</span>
+                                <span className="flex items-center gap-1.5"><span className="inline-flex items-center justify-center w-5 h-2.5 rounded border border-[#334155] bg-[#cbd5e1]"></span>Suburb Road</span>
+                                <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 border-t border-dashed border-[#475569]"></span>Alley</span>
+                                <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 border-t border-dashed border-[#059669]"></span>Park Trail</span>
+                            </div>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 items-center">
+                                <span className="font-semibold text-slate-700 mr-1">Zones:</span>
+                                <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#bae6fd] border border-[#cbd5e1]"></span>Water</span>
+                                <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#e2e8f0] border border-[#cbd5e1]"></span>City Center</span>
+                                <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#f8fafc] border border-[#cbd5e1]"></span>Suburbs</span>
+                                <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#dcfce7] border border-[#cbd5e1]"></span>Park / Forest</span>
+                                <span className="font-semibold text-slate-700 ml-2 mr-1">Structures:</span>
+                                <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#e0f2fe] border border-[#0284c7]"></span>Commercial</span>
+                                <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#fed7aa] border border-[#c2410c]"></span>House</span>
+                                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#86efac] border border-[#15803d]"></span>Tree</span>
+                                <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#e2e8f0] border border-[#cbd5e1] flex items-center justify-center"><span className="text-[7.5px] text-[#64748b] font-bold font-sans leading-none">P</span></span>Parking</span>
+                            </div>
                         </div>
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 items-center">
-                            <span className="font-semibold text-slate-700 mr-1">Zones:</span>
-                            <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#bae6fd] border border-[#cbd5e1]"></span>Water</span>
-                            <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#e2e8f0] border border-[#cbd5e1]"></span>City Center</span>
-                            <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#f8fafc] border border-[#cbd5e1]"></span>Suburbs</span>
-                            <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#dcfce7] border border-[#cbd5e1]"></span>Park / Forest</span>
-                            <span className="font-semibold text-slate-700 ml-2 mr-1">Structures:</span>
-                            <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#e0f2fe] border border-[#0284c7]"></span>Commercial</span>
-                            <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#fed7aa] border border-[#c2410c]"></span>House</span>
-                            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#86efac] border border-[#15803d]"></span>Tree</span>
-                            <span className="flex items-center gap-1.5"><span className="w-3.5 h-2.5 rounded bg-[#e2e8f0] border border-[#cbd5e1] flex items-center justify-center"><span className="text-[7.5px] text-[#64748b] font-bold font-sans leading-none">P</span></span>Parking</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4">
+                        <div className="flex gap-4 text-xs font-mono text-slate-600 bg-slate-50 px-3 py-1.5 rounded border border-slate-200">
+                            <div>Island: <span className="text-slate-800 font-medium">{uiStats.activeIsland ? `[${uiStats.activeIsland}]` : 'None'}</span></div>
+                            <div>Status: <span className="text-slate-800 font-medium">{uiStats.phase}</span></div>
+                            <div>Queued: <span className="text-slate-800 font-medium">{uiStats.queued}</span></div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <div className="flex gap-3 text-xs font-mono text-slate-500">
+                                <div>Roads: <span className="text-slate-700 font-medium">{uiStats.edges}</span></div>
+                                <div>Structures: <span className="text-slate-700 font-medium">{uiStats.buildings}</span></div>
+                                <div>Fences: <span className="text-slate-700 font-medium">{uiStats.fences}</span></div>
+                            </div>
+                            <button onClick={() => setIsRunning(!isRunning)} className="px-3 py-1.5 rounded bg-white hover:bg-slate-50 border border-slate-200 text-xs font-medium text-slate-700 transition-colors shadow-sm cursor-pointer">
+                                {isRunning ? 'Pause Engine' : 'Resume Engine'}
+                            </button>
+                            <button onClick={() => { initWorld(); setIsRunning(true); }} className="px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition-colors shadow-sm cursor-pointer">
+                                Wipe Earth
+                            </button>
+                            <button
+                                onClick={() => setView3D(true)}
+                                style={{ background: 'linear-gradient(135deg,#00c8ff,#8800ff)', border: 'none', color: '#fff', padding: '6px 16px', borderRadius: 6, fontSize: 12, fontWeight: 700, letterSpacing: 2, cursor: 'pointer', boxShadow: '0 0 16px rgba(0,200,255,0.35)' }}
+                            >
+                                ▶ 3D VIEW
+                            </button>
                         </div>
                     </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex gap-4 text-xs font-mono text-slate-600 bg-slate-50 px-3 py-1.5 rounded border border-slate-200">
-                        <div>Island: <span className="text-slate-800 font-medium">{uiStats.activeIsland ? `[${uiStats.activeIsland}]` : 'None'}</span></div>
-                        <div>Status: <span className="text-slate-800 font-medium">{uiStats.phase}</span></div>
-                        <div>Queued: <span className="text-slate-800 font-medium">{uiStats.queued}</span></div>
+                <div
+                    className="flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing bg-[#e0f2fe]"
+                    ref={wrapperRef}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                >
+                    <canvas ref={canvasRef} className="absolute inset-0 block" />
+                    <div className="absolute bottom-4 left-4 text-[10px] font-mono text-slate-400 pointer-events-none bg-white/80 backdrop-blur-sm px-2 py-1 rounded border border-slate-200 shadow-sm">
+                        Drag to Pan • Scroll to Zoom
                     </div>
-                    <div className="flex items-center gap-4">
-                        <div className="flex gap-3 text-xs font-mono text-slate-500">
-                            <div>Roads: <span className="text-slate-700 font-medium">{uiStats.edges}</span></div>
-                            <div>Structures: <span className="text-slate-700 font-medium">{uiStats.buildings}</span></div>
-                            <div>Fences: <span className="text-slate-700 font-medium">{uiStats.fences}</span></div>
-                        </div>
-                        <button onClick={() => setIsRunning(!isRunning)} className="px-3 py-1.5 rounded bg-white hover:bg-slate-50 border border-slate-200 text-xs font-medium text-slate-700 transition-colors shadow-sm cursor-pointer">
-                            {isRunning ? 'Pause Engine' : 'Resume Engine'}
-                        </button>
-                        <button onClick={() => { initWorld(); setIsRunning(true); }} className="px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition-colors shadow-sm cursor-pointer">
-                            Wipe Earth
-                        </button>
+                    <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-white/90 backdrop-blur-sm border border-slate-200 p-1.5 rounded-lg shadow-sm pointer-events-auto">
                         <button
-                            onClick={() => setView3D(true)}
-                            style={{ background: 'linear-gradient(135deg,#00c8ff,#8800ff)', border: 'none', color: '#fff', padding: '6px 16px', borderRadius: 6, fontSize: 12, fontWeight: 700, letterSpacing: 2, cursor: 'pointer', boxShadow: '0 0 16px rgba(0,200,255,0.35)' }}
-                        >
-                            ▶ 3D VIEW
-                        </button>
+                            onClick={() => {
+                                if (!wrapperRef.current) return;
+                                const zoom = zoomRef.current;
+                                const cx = cameraRef.current.x + wrapperRef.current.clientWidth / (2 * zoom);
+                                const cy = cameraRef.current.y + wrapperRef.current.clientHeight / (2 * zoom);
+                                const newZoom = _min(4.0, zoom * 1.25);
+                                cameraRef.current.x = cx - wrapperRef.current.clientWidth / (2 * newZoom);
+                                cameraRef.current.y = cy - wrapperRef.current.clientHeight / (2 * newZoom);
+                                changeZoom(newZoom);
+                            }}
+                            className="w-7 h-7 flex items-center justify-center rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm cursor-pointer transition-colors"
+                            title="Zoom In"
+                        >+</button>
+                        <button
+                            onClick={() => {
+                                if (!wrapperRef.current) return;
+                                const zoom = zoomRef.current;
+                                const cx = cameraRef.current.x + wrapperRef.current.clientWidth / (2 * zoom);
+                                const cy = cameraRef.current.y + wrapperRef.current.clientHeight / (2 * zoom);
+                                const newZoom = _max(0.15, zoom / 1.25);
+                                cameraRef.current.x = cx - wrapperRef.current.clientWidth / (2 * newZoom);
+                                cameraRef.current.y = cy - wrapperRef.current.clientHeight / (2 * newZoom);
+                                changeZoom(newZoom);
+                            }}
+                            className="w-7 h-7 flex items-center justify-center rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm cursor-pointer transition-colors"
+                            title="Zoom Out"
+                        >−</button>
+                        <button
+                            onClick={() => {
+                                if (!wrapperRef.current) return;
+                                const zoom = zoomRef.current;
+                                const cx = cameraRef.current.x + wrapperRef.current.clientWidth / (2 * zoom);
+                                const cy = cameraRef.current.y + wrapperRef.current.clientHeight / (2 * zoom);
+                                cameraRef.current.x = cx - wrapperRef.current.clientWidth / 2;
+                                cameraRef.current.y = cy - wrapperRef.current.clientHeight / 2;
+                                changeZoom(1.0);
+                            }}
+                            className="px-2 h-7 flex items-center justify-center rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold cursor-pointer transition-colors"
+                            title="Reset Zoom"
+                        >{Math.round(zoomState * 100)}%</button>
                     </div>
                 </div>
             </div>
-
-            <div
-                className="flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing bg-[#e0f2fe]"
-                ref={wrapperRef}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-            >
-                <canvas ref={canvasRef} className="absolute inset-0 block" />
-                <div className="absolute bottom-4 left-4 text-[10px] font-mono text-slate-400 pointer-events-none bg-white/80 backdrop-blur-sm px-2 py-1 rounded border border-slate-200 shadow-sm">
-                    Drag to Pan • Scroll to Zoom
-                </div>
-                <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-white/90 backdrop-blur-sm border border-slate-200 p-1.5 rounded-lg shadow-sm pointer-events-auto">
-                    <button
-                        onClick={() => {
-                            if (!wrapperRef.current) return;
-                            const zoom = zoomRef.current;
-                            const cx = cameraRef.current.x + wrapperRef.current.clientWidth / (2 * zoom);
-                            const cy = cameraRef.current.y + wrapperRef.current.clientHeight / (2 * zoom);
-                            const newZoom = _min(4.0, zoom * 1.25);
-                            cameraRef.current.x = cx - wrapperRef.current.clientWidth / (2 * newZoom);
-                            cameraRef.current.y = cy - wrapperRef.current.clientHeight / (2 * newZoom);
-                            changeZoom(newZoom);
-                        }}
-                        className="w-7 h-7 flex items-center justify-center rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm cursor-pointer transition-colors"
-                        title="Zoom In"
-                    >+</button>
-                    <button
-                        onClick={() => {
-                            if (!wrapperRef.current) return;
-                            const zoom = zoomRef.current;
-                            const cx = cameraRef.current.x + wrapperRef.current.clientWidth / (2 * zoom);
-                            const cy = cameraRef.current.y + wrapperRef.current.clientHeight / (2 * zoom);
-                            const newZoom = _max(0.15, zoom / 1.25);
-                            cameraRef.current.x = cx - wrapperRef.current.clientWidth / (2 * newZoom);
-                            cameraRef.current.y = cy - wrapperRef.current.clientHeight / (2 * newZoom);
-                            changeZoom(newZoom);
-                        }}
-                        className="w-7 h-7 flex items-center justify-center rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm cursor-pointer transition-colors"
-                        title="Zoom Out"
-                    >−</button>
-                    <button
-                        onClick={() => {
-                            if (!wrapperRef.current) return;
-                            const zoom = zoomRef.current;
-                            const cx = cameraRef.current.x + wrapperRef.current.clientWidth / (2 * zoom);
-                            const cy = cameraRef.current.y + wrapperRef.current.clientHeight / (2 * zoom);
-                            cameraRef.current.x = cx - wrapperRef.current.clientWidth / 2;
-                            cameraRef.current.y = cy - wrapperRef.current.clientHeight / 2;
-                            changeZoom(1.0);
-                        }}
-                        className="px-2 h-7 flex items-center justify-center rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold cursor-pointer transition-colors"
-                        title="Reset Zoom"
-                    >{Math.round(zoomState * 100)}%</button>
-                </div>
-            </div>
-        </div>
-        {view3D && (
-            <VoxelView worldRef={worldRef} onClose={() => setView3D(false)} />
-        )}
+            {view3D && (
+                <VoxelView worldRef={worldRef} onClose={() => setView3D(false)} />
+            )}
         </>
     );
 }
