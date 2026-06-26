@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import VoxelView from './VoxelView.jsx';
 
 // --- Cache Math functions as locals for hot-path speed ---
 const _sin = Math.sin;
@@ -195,6 +196,7 @@ export default function App() {
     });
 
     const [isRunning, setIsRunning] = useState(true);
+    const [view3D, setView3D] = useState(false);
     const [uiStats, setUiStats] = useState({
         phase: 'Initializing', activeIsland: null, queued: 0,
         nodes: 0, edges: 0, buildings: 0, parking: 0, fences: 0
@@ -1273,6 +1275,7 @@ export default function App() {
     const handleMouseUp = () => { dragRef.current.isDragging = false; };
 
     return (
+        <>
         <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-800 select-none">
             <div className="flex flex-wrap items-center justify-between p-4 bg-white border-b border-slate-200 z-10 relative shrink-0 shadow-sm gap-4">
                 <div>
@@ -1319,6 +1322,12 @@ export default function App() {
                         </button>
                         <button onClick={() => { initWorld(); setIsRunning(true); }} className="px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition-colors shadow-sm cursor-pointer">
                             Wipe Earth
+                        </button>
+                        <button
+                            onClick={() => setView3D(true)}
+                            style={{ background: 'linear-gradient(135deg,#00c8ff,#8800ff)', border: 'none', color: '#fff', padding: '6px 16px', borderRadius: 6, fontSize: 12, fontWeight: 700, letterSpacing: 2, cursor: 'pointer', boxShadow: '0 0 16px rgba(0,200,255,0.35)' }}
+                        >
+                            ▶ 3D VIEW
                         </button>
                     </div>
                 </div>
@@ -1381,5 +1390,9 @@ export default function App() {
                 </div>
             </div>
         </div>
+        {view3D && (
+            <VoxelView worldRef={worldRef} onClose={() => setView3D(false)} />
+        )}
+        </>
     );
 }
