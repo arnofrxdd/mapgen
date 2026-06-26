@@ -648,13 +648,22 @@ function buildJunctions(builder, nodes, edges, mats, nodeConnections, junctionPo
   }
 }
 
-function buildBuilding(builder,b,mats,seed){
-  const bx=b.x,bz=b.y,bw=b.w,bd=b.h,ang=b.angle;
-  const cosA=Math.cos(-ang),sinA=Math.sin(-ang);
-  const bh=bldgHeight(b,seed),h1=H1(bx+seed,bz);
-  const lbox=(w,h,d,mat,lx,ly,lz,ry=0)=>{
-    const wx=bx+cosA*lx-sinA*lz,wz=bz+sinA*lx+cosA*lz;
-    builder.addBox(w,h,d,mat,wx,ly,wz,-ang+ry);
+function buildBuilding(builder, b, mats, seed) {
+  const bx = b.x, bz = b.y, bw = b.w, bd = b.h, ang = b.angle;
+  const bh = bldgHeight(b, seed);
+  const wMat = mats.winWarm;
+  const tMat = mats.tower[Math.floor(H2(bx, bz, 2) * mats.tower.length)];
+  const tTop = mats.towerTop;
+  const h1 = H1(bx + seed, bz);
+  
+  const lbox = (w, h, d, mat, ly) => {
+    builder.addBox(w, h, d, mat, bx, ly, bz, -ang);
+  };
+  const lboxOffset = (w, h, d, mat, ly, lx, lz) => {
+    const cosA = Math.cos(-ang), sinA = Math.sin(-ang);
+    const wx = bx + cosA * lx - sinA * lz;
+    const wz = bz + sinA * lx + cosA * lz;
+    builder.addBox(w, h, d, mat, wx, ly, wz, -ang);
   };
 
   if(b.type==="TREE"){
@@ -668,13 +677,14 @@ function buildBuilding(builder,b,mats,seed){
   }
 
   if(b.type==="PARKING_LOT"){
-    lbox(bw,0.5,bd,mats.parking,0,0.25,0);
+    lbox(bw,0.5,bd,mats.parking,0.25);
     const cols=Math.max(1,Math.floor((bw-1)/2.8));
     for(let c=0;c<cols-1;c++){
       const lx=-bw/2+1.0+(c+1)*(bw-1)/cols;
-      lbox(0.1,0.06,bd-1.5,mats.whiteDiv,lx,0.53,0);
+      lboxOffset(0.1,0.06,bd-1.5,mats.whiteDiv,0.53,lx,0);
     }
     if(b.cars){
+      const cosA = Math.cos(-ang), sinA = Math.sin(-ang);
       for(const car of b.cars){
         const wx=bx+cosA*car.lx-sinA*car.ly,wz=bz+sinA*car.lx+cosA*car.ly;
         const ci=Math.floor(H2(wx,wz,7)*mats.carMats.length);
@@ -697,135 +707,86 @@ function buildBuilding(builder,b,mats,seed){
     return;
   }
 
-  if(b.type==="HOUSE"){
-    const wallH=bh*0.65,roofH=bh*0.38;
-    if (b.isTriangle) {
-      const lx = bx, lz = bz;
-      builder.addPrism(bw, wallH, bd, mats.houseWall, lx, wallH/2, lz, -ang);
-      builder.addPrism(bw+0.4, roofH, bd+0.4, mats.houseRoof, lx, wallH+roofH/2, lz, -ang);
-      return;
-    }
-    lbox(bw,wallH,bd,mats.houseWall,0,wallH/2,0);
-    lbox(bw+0.4,roofH,bd+0.3,mats.houseRoof,0,wallH+roofH*0.42,0);
+  if (b.type === "HOUSE") {
+    const hw = bw * 0.8, hd = bd * 0.8;
+    const hH = 3.0 + H2(bx, bz, 5) * 2.0;
     
-    if (H2(bx, bz, 22) > 0.5) {
-      lbox(0.7, roofH + 0.8, 0.7, mats.clutterMat, bw*0.3, wallH+roofH/2, bd*0.3);
-    }
-
-    const nw=Math.max(1,Math.floor(bw/3));
-    for(let w=0;w<nw;w++){
-      if(H2(bx+w,bz,9)<0.2)continue;
-      const lx=-bw/2+1.0+w*(bw/nw)+0.5,wy=wallH*0.5;
-      const wfx=bx+cosA*lx-sinA*(bd/2+0.02),wfz=bz+sinA*lx+cosA*(bd/2+0.02);
-      const wbx=bx+cosA*lx-sinA*(-bd/2-0.02),wbz=bz+sinA*lx+cosA*(-bd/2-0.02);
-      builder.addBox(1.0,1.0,0.1,mats.houseWin,wfx,wy,wfz,-ang);
-      builder.addBox(1.0,1.0,0.1,mats.houseWin,wbx,wy,wbz,-ang);
-    }
+    // Core house box
+    lbox(hw, hH, hd, mats.houseWall, hH / 2);
+    
+    // Roof
+    builder.addPrism(hw + 0.4, 2.0, hd + 0.4, mats.houseRoof, bx, hH + 1.0, bz, -ang);
+    
     return;
   }
 
-  const tMat=mats.tower[Math.floor(H2(bx,bz,3)*mats.tower.length)];
-  const wMats=[mats.winWarm,mats.winCyan,mats.winPink,mats.winGreen,mats.winAmber];
-  const wMat=wMats[Math.floor(H2(bx,bz,1)*wMats.length)];
-  const levels=bh>32?3:bh>16?2:1;
+  // Commercial Buildings
+  const finalLw = bw * 0.85;
+  const finalLd = bd * 0.85;
+  const archStyle = Math.floor(H2(bx, bz, 99) * 3);
   
-  for(let lvl=0;lvl<levels;lvl++){
-    let lw=bw, ld=bd, lx_off=0, lz_off=0;
-    if (lvl > 0) {
-      if (bw >= 20 && H2(bx, bz, 14) > 0.5) {
-        // Asymmetric slender tower on a wide podium
-        lw = bw * (0.35 - lvl * 0.05);
-        ld = bd * (0.8 - lvl * 0.1);
-        lx_off = (bw / 2 - lw / 2 - 1.0) * (H2(bx, bz, lvl) > 0.5 ? 1 : -1);
-      } else {
-        // Standard setback
-        const sh=0.18*lvl;
-        lw=bw*(1-sh);
-        ld=bd*(1-sh);
-      }
-    }
-
-    const botY=bh*(lvl/levels),topY=bh*((lvl+1)/levels),lh=topY-botY;
+  if (b.isTriangle) {
+    // Solid triangular core
+    builder.addPrism(finalLw, bh, finalLd, tMat, bx, bh / 2, bz, -ang);
     
-    if (b.isTriangle) {
-      builder.addPrism(lw, lh, ld, tMat, bx, botY+lh/2, bz, -ang);
-      continue; 
+    // Ledges to fake windows without buggy rendering
+    const floors = Math.floor(bh / 3.0);
+    for (let i = 1; i < floors; i++) {
+       const fy = i * 3.0;
+       builder.addPrism(finalLw + 0.4, 0.4, finalLd + 0.4, wMat, bx, fy, bz, -ang);
     }
     
-    lbox(lw,lh,ld,tMat,lx_off,botY+lh/2,lz_off);
+    // Parapet
+    builder.addPrism(finalLw, 0.8, finalLd, tTop, bx, bh + 0.4, bz, -ang);
+  } else {
+    // Rectangular core (Windows)
+    lbox(finalLw, bh, finalLd, wMat, bh / 2);
     
-    const wRows=Math.max(1,Math.floor((lh-1.2)/3.2)),wCX=Math.max(1,Math.floor(lw/2.6)),wCZ=Math.max(1,Math.floor(ld/2.6));
-    for(let r=0;r<wRows;r++){
-      const wy=botY+1.4+r*3.2+1.0;
-      if(wy>=topY-0.5)break;
-      
-      for(let c=0;c<wCX;c++){
-        const lit=H2(bx*10+c,bz*10+r+lvl*100,5)>0.22,wm=lit?wMat:mats.winOff;
-        const lx=-lw/2+1.2+c*(lw/wCX) + lx_off;
-        const wfx=bx+cosA*lx-sinA*(ld/2+0.02 + lz_off),wfz=bz+sinA*lx+cosA*(ld/2+0.02 + lz_off);
-        const wbx=bx+cosA*lx-sinA*(-ld/2-0.02 + lz_off),wbz=bz+sinA*lx+cosA*(-ld/2-0.02 + lz_off);
-        
-        builder.addBox(1.2,1.4,0.1,wm,wfx,wy,wfz,-ang);
-        builder.addBox(1.2,1.4,0.1,wm,wbx,wy,wbz,-ang);
-      }
-      for(let c=0;c<wCZ;c++){
-        const lit=H2(bx*10+c+50,bz*10+r+lvl*100+50,6)>0.22,wm=lit?wMat:mats.winOff;
-        const lz=-ld/2+1.2+c*(ld/wCZ) + lz_off;
-        const wlx=bx+cosA*(-lw/2-0.02 + lx_off)-sinA*lz,wlz=bz+sinA*(-lw/2-0.02 + lx_off)+cosA*lz;
-        const wrx=bx+cosA*(lw/2+0.02 + lx_off)-sinA*lz,wrz=bz+sinA*(lw/2+0.02 + lx_off)+cosA*lz;
-        
-        builder.addBox(0.1,1.4,1.2,wm,wlx,wy,wlz,-ang);
-        builder.addBox(0.1,1.4,1.2,wm,wrx,wy,wrz,-ang);
-      }
+    // Horizontal ledges wrapping around the core tightly
+    const floorH = 3.0;
+    const floors = Math.floor(bh / floorH);
+    for (let i = 0; i <= floors; i++) {
+       const fy = i * floorH;
+       const ledgeThickness = (i === 0 || i === floors) ? 0.8 : 0.4;
+       lbox(finalLw + 0.4, ledgeThickness, finalLd + 0.4, tMat, fy);
     }
-    if(lvl<levels-1) {
-      lbox(lw+0.4,0.5,ld+0.4,mats.towerTop,lx_off,topY+0.25,lz_off);
+    
+    // Vertical columns perfectly aligned with the exterior boundary
+    const colSpacing = 3.0;
+    const colsW = Math.max(2, Math.floor(finalLw / colSpacing));
+    const colW = archStyle === 0 ? 0.8 : 0.4;
+    
+    // Front and Back columns spanning the entire building width
+    for (let i = 0; i <= colsW; i++) {
+       const t = i / colsW;
+       const cx = -finalLw / 2 + finalLw * t;
+       lboxOffset(colW, bh, 0.4, tMat, bh / 2, cx, finalLd / 2);
+       lboxOffset(colW, bh, 0.4, tMat, bh / 2, cx, -finalLd / 2);
     }
-  }
-  
-  const topPlatformH = bh + 0.3;
-  // Get the last level's offsets and dimensions
-  const finalLw = bw >= 20 && H2(bx, bz, 14) > 0.5 && levels > 1 ? bw * (0.35 - (levels-1) * 0.05) : bw * (1 - 0.18 * (levels-1));
-  const finalLd = bw >= 20 && H2(bx, bz, 14) > 0.5 && levels > 1 ? bd * (0.8 - (levels-1) * 0.1) : bd * (1 - 0.18 * (levels-1));
-  const finalLxOff = bw >= 20 && H2(bx, bz, 14) > 0.5 && levels > 1 ? (bw / 2 - finalLw / 2 - 1.0) * (H2(bx, bz, levels-1) > 0.5 ? 1 : -1) : 0;
-  
-  lbox(finalLw*0.85,0.6,finalLd*0.85,mats.towerTop,finalLxOff,topPlatformH,0);
-  
-  if (H2(bx, bz, 30) > 0.5) {
-    lbox(finalLw*0.6, 0.08, finalLd*0.6, mats.whiteDiv, finalLxOff, topPlatformH + 0.32, 0);
-  }
-  
-  const coolingUnitsCount = Math.floor(H2(bx, bz, 31) * 3) + 1;
-  for (let i = 0; i < coolingUnitsCount; i++) {
-    const rx = (H2(bx, bz, i + 35) - 0.5) * (bw * 0.5);
-    const rz = (H2(bx, bz, i + 37) - 0.5) * (bd * 0.5);
-    lbox(1.5, 1.2, 1.5, mats.clutterMat, rx, topPlatformH + 0.6, rz);
-    lbox(0.9, 0.2, 0.9, mats.towerTop, rx, topPlatformH + 1.2, rz);
-  }
-
-  if(bh>20 && H2(bx,bz,11)>0.4){
-    const sh2=4.0+H2(bx,bz,12)*9.0;
-    const ax = (H2(bx,bz,40) - 0.5) * (bw * 0.3);
-    const az = (H2(bx,bz,41) - 0.5) * (bd * 0.3);
     
-    lbox(0.3, sh2, 0.3, mats.poleMat, ax, bh + 0.6 + sh2/2, az);
-    lbox(0.6, 0.6, 0.6, mats.towerTop, ax, bh + 0.6, az);
-    lbox(0.5, 0.5, 0.5, mats.warningRed, ax, bh + 0.6 + sh2 + 0.25, az);
-  }
-  
-  if(bh>12 && H2(bx,bz,4)>0.30){
-    const ni=Math.floor(H2(bx,bz,2)*mats.neonCols.length),neons=mats.neonMats;
-    const sh2=3.0+H2(bx,bz,8)*4.5,sw=Math.min(bw*0.8, 6.5+H2(bx,bz,9)*8),sy=bh*(0.4+H2(bx,bz,10)*0.4);
-    const faceX=bx+cosA*0-sinA*(bd/2+0.32),faceZ=bz+sinA*0+cosA*(bd/2+0.32);
+    // Left and Right columns
+    const colsD = Math.max(2, Math.floor(finalLd / colSpacing));
+    for (let i = 0; i <= colsD; i++) {
+       const t = i / colsD;
+       const cz = -finalLd / 2 + finalLd * t;
+       lboxOffset(0.4, bh, colW, tMat, bh / 2, finalLw / 2, cz);
+       lboxOffset(0.4, bh, colW, tMat, bh / 2, -finalLw / 2, cz);
+    }
     
-    builder.addBox(sw,sh2,0.32,neons.solid[ni],faceX,sy,faceZ,-ang);
+    // Roof Parapet and details
+    lbox(finalLw, 0.8, finalLd, tTop, bh + 0.4);
     
-    const halo=new THREE.Mesh(new THREE.BoxGeometry(sw+1.8,sh2+1.8,0.1),neons.glow[ni]);
-    halo.position.set(faceX,sy,faceZ);halo.rotation.y=-ang;
-    builder.addExtra(halo);
+    if (finalLw > 15 && finalLd > 15 && H2(bx, bz, 30) > 0.4) {
+      lbox(10.0, 0.2, 10.0, tTop, bh + 0.8);
+      lbox(9.0, 0.1, 9.0, mats.centerLine, bh + 1.0);
+    }
     
-    for(const dy of[-sh2*0.56,sh2*0.56]){
-      builder.addBox(sw*0.95,0.16,0.16,neons.solid[ni],faceX,sy+dy,faceZ,-ang);
+    // Roof clutter
+    const units = Math.floor(H2(bx, bz, 31) * 3) + 1;
+    for (let i = 0; i < units; i++) {
+       const rx = (H2(bx, bz, i + 35) - 0.5) * (finalLw * 0.5);
+       const rz = (H2(bx, bz, i + 37) - 0.5) * (finalLd * 0.5);
+       lboxOffset(1.8, 1.4, 1.8, mats.clutterMat, bh + 0.8, rx, rz);
     }
   }
 }
