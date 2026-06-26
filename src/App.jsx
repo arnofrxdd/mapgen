@@ -627,7 +627,9 @@ export default function App() {
                 }
 
                 if (currentT + bWidth > endT) bWidth = endT - currentT;
-                if (bWidth < 5) { currentT += 1; continue; }
+                // Hard minimum — no building can be thinner than 8 units in either dimension
+                if (bWidth < 8) { currentT += bWidth + 1; continue; }
+                if (bDepth < 8) bDepth = 8;
 
                 const distToCenter = roadHalfWidth + sidewalk + (bDepth * 0.5);
                 const bx = edge.n1.x + (dx * invLen) * (currentT + bWidth * 0.5) + nx * dir * distToCenter;
@@ -656,18 +658,54 @@ export default function App() {
                     }
                     basePart.cars = cars;
                     generatedParts.push(basePart);
+                } else if (type === 'HOUSE') {
+                    // Voxel house shapes: rectangle, L-shape, or paired semi-detached
+                    const shapeRoll = _random();
+                    if (shapeRoll < 0.35 && bWidth >= 16 && bDepth >= 12) {
+                        // L-shape: main body + wing to one side
+                        generatedParts.push(basePart);
+                        const wingW = _floor(bWidth * 0.5 / 4) * 4; // snap to 4
+                        const wingD = _floor(bDepth * 0.5 / 4) * 4;
+                        if (wingW >= 8 && wingD >= 8) {
+                            const side = _random() > 0.5 ? 1 : -1;
+                            const wx = bx + _cos(angle) * (bWidth * 0.5 - wingW * 0.5) * side - _sin(angle) * (bDepth * 0.5 + wingD * 0.5);
+                            const wy = by + _sin(angle) * (bWidth * 0.5 - wingW * 0.5) * side + _cos(angle) * (bDepth * 0.5 + wingD * 0.5);
+                            generatedParts.push({ x: wx, y: wy, w: wingW, h: wingD, angle, type });
+                        }
+                    } else if (shapeRoll < 0.55 && bWidth >= 24) {
+                        // Semi-detached pair: two identical houses side by side
+                        const halfW = _floor(bWidth * 0.5 / 4) * 4;
+                        if (halfW >= 8) {
+                            const offX1 = _cos(angle) * (-halfW * 0.5) - _sin(angle) * 0;
+                            const offY1 = _sin(angle) * (-halfW * 0.5) + _cos(angle) * 0;
+                            const offX2 = _cos(angle) * (halfW * 0.5) - _sin(angle) * 0;
+                            const offY2 = _sin(angle) * (halfW * 0.5) + _cos(angle) * 0;
+                            generatedParts.push({ x: bx + offX1, y: by + offY1, w: halfW, h: bDepth, angle, type });
+                            generatedParts.push({ x: bx + offX2, y: by + offY2, w: halfW, h: bDepth, angle, type });
+                        } else {
+                            generatedParts.push(basePart);
+                        }
+                    } else {
+                        // Plain rectangle house
+                        generatedParts.push(basePart);
+                    }
                 } else {
+                    // COMMERCIAL buildings
                     generatedParts.push(basePart);
-                    if (type === 'COMMERCIAL' && _random() < 0.25 && bWidth >= 5 && bDepth >= 5) {
-                        const wingW = _floor(bWidth * 0.5) || 3;
-                        const wingH = _floor(bDepth * 0.6) || 3;
-                        const lx = (bWidth * 0.5 + wingW * 0.5) * (_random() > 0.5 ? 1 : -1);
-                        const ly = (bDepth * 0.5 - wingH * 0.5) * (_random() > 0.5 ? 1 : -1);
-                        generatedParts.push({
-                            x: bx + _cos(angle) * lx - _sin(angle) * ly,
-                            y: by + _sin(angle) * lx + _cos(angle) * ly,
-                            w: wingW, h: wingH, angle, type
-                        });
+                    if (_random() < 0.3 && bWidth >= 16 && bDepth >= 8) {
+                        // L-shape or T-shape wing for commercial
+                        const isT = _random() < 0.5;
+                        const wingW = _floor(bWidth * (isT ? 0.4 : 0.5) / 4) * 4;
+                        const wingD = _floor(bDepth * 0.5 / 4) * 4;
+                        if (wingW >= 8 && wingD >= 8) {
+                            const lxOff = isT ? 0 : (bWidth * 0.5 + wingW * 0.5) * (_random() > 0.5 ? 1 : -1);
+                            const lyOff = bDepth * 0.5 + wingD * 0.5;
+                            generatedParts.push({
+                                x: bx + _cos(angle) * lxOff - _sin(angle) * lyOff,
+                                y: by + _sin(angle) * lxOff + _cos(angle) * lyOff,
+                                w: wingW, h: wingD, angle, type
+                            });
+                        }
                     }
                 }
 
