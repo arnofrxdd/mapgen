@@ -4,7 +4,7 @@ import * as THREE from "three";
 // Road half-widths (full width = hw * 2)
 const ROAD_HW = {
   highway:7.5,causeway:6.0,street:4.5,coast:4.0,
-  suburb_road:3.5,ramp:4.0,alley:1.5,park_path:1.0,
+  suburb_road:3.5,ramp:4.0,alley:2.0,
 };
 const BRIDGE_ELEV=5.0,ROAD_H=0.30,CURB_H=0.36,CURB_W=1.1;
 const FENCE_H=1.4,LAMP_H=8.5,LAMP_SPACING=28,CAR_W=1.8,CAR_D=3.5;
@@ -396,7 +396,7 @@ function buildRoad(builder,e,mats,nodeConnections,junctionPolygons){
   const midY = (startY + endY) * 0.5;
   const pitch = Math.atan2(dy, newLen);
   
-  const rMat={highway:mats.highway,causeway:mats.causeway,ramp:mats.ramp,alley:mats.alley,park_path:mats.parkPath}[e.type]||mats.asphalt;
+  const rMat={highway:mats.highway,causeway:mats.causeway,ramp:mats.ramp,alley:mats.alley}[e.type]||mats.asphalt;
   
   builder.addBox(newLen,ROAD_H,hw*2,rMat,cx,midY+ROAD_H/2,cz,-ang, pitch);
   
@@ -552,11 +552,14 @@ function buildRoad(builder,e,mats,nodeConnections,junctionPolygons){
     }
   }
   
-  if(e.type==="park_path"){
+  if(e.type==="alley"){
+    // Narrow curbs on both sides
     for(const s of[-1,1]){
-      const lo=s*(hw-0.2),ox=-Math.sin(ang)*lo,oz=Math.cos(ang)*lo;
-      builder.addBox(newLen,0.06,0.16,mats.greenLine,cx+ox,midY+ROAD_H+0.03,cz+oz,-ang, pitch);
+      const co=s*(hw+0.1),ox=-Math.sin(ang)*co,oz=Math.cos(ang)*co;
+      builder.addBox(newLen,CURB_H,0.3,mats.curbCity,cx+ox,midY+CURB_H/2,cz+oz,-ang, pitch);
     }
+    // Center divider line
+    builder.addBox(newLen,0.05,0.12,mats.centerLine,cx,midY+ROAD_H+0.03,cz,-ang, pitch);
   }
 }
 

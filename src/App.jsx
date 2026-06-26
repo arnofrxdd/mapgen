@@ -584,7 +584,7 @@ export default function App() {
         if (eType === 'causeway') { roadHalfWidth = 4.0; sidewalk = 1.5; }
         if (eType === 'ramp') { roadHalfWidth = 2.5; sidewalk = 1.5; }
         if (eType === 'suburb_road') { roadHalfWidth = 2.5; sidewalk = 1.5; }
-        if (eType === 'park_path') { roadHalfWidth = 0.5; sidewalk = 0.5; }
+        if (eType === 'alley') { roadHalfWidth = 2.0; sidewalk = 1.0; }
 
         for (let dir = -1; dir <= 1; dir += 2) {
             let currentT = 1;
@@ -888,7 +888,7 @@ export default function App() {
                     if (agent.type === 'ramp') { agents.splice(idx, 1); continue; }
                     else if (agent.type === 'highway' || agent.type === 'causeway') { isBridge = true; agent.wasBridge = true; }
                     else if (agent.type === 'alley') { forceMerge = true; }
-                    else if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'coast' || agent.type === 'park_path') {
+                    else if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'coast') {
                         agent.type = 'coast';
                         const eps = 2;
                         const sx = agent.node.x + seedOffset, sy = agent.node.y + seedOffset;
@@ -907,9 +907,8 @@ export default function App() {
                             else agent.life = _max(agent.life, 30);
                     }
                 } else if (!forceMerge && nextTerrain === T_PARK) {
-                    if (agent.type === 'street' || agent.type === 'suburb_road') agent.type = 'park_path';
                     if (agent.type === 'alley') forceMerge = true;
-                } else if (!forceMerge && agent.type === 'alley' && nextTerrain !== T_CITY) {
+                } else if (!forceMerge && agent.type === 'alley' && nextTerrain !== T_CITY && nextTerrain !== T_SUBURB) {
                     forceMerge = true;
                 }
 
@@ -923,7 +922,7 @@ export default function App() {
                         const tt = getTerrain(target.x, target.y, seedOffset);
                         if (tt === T_PARK || tt === T_WATER || isInvalidRampConnection(chunk, target)) target = null;
                     }
-                    if (target && (agent.type === 'alley' || agent.type === 'park_path')) {
+                    if (target && agent.type === 'alley') {
                         if (isRampNode(chunk, target)) target = null;
                     }
                     if (target && (agent.type === 'highway' || agent.type === 'causeway' || !checkWaterCrossing(agent.node, target, seedOffset))) {
@@ -945,7 +944,7 @@ export default function App() {
                     const tt = getTerrain(nearbyNode.x, nearbyNode.y, seedOffset);
                     if (tt === T_PARK || tt === T_WATER || isInvalidRampConnection(chunk, nearbyNode)) nearbyNode = null;
                 }
-                if (nearbyNode && (agent.type === 'alley' || agent.type === 'park_path')) {
+                if (nearbyNode && agent.type === 'alley') {
                     if (isRampNode(chunk, nearbyNode)) nearbyNode = null;
                 }
                 if (nearbyNode && agent.type !== 'highway' && checkWaterCrossing(agent.node, nearbyNode, seedOffset)) {
@@ -1024,12 +1023,6 @@ export default function App() {
                     }
                 } else if (agent.type === 'alley' || agent.type === 'coast') {
                     agent.angle += (_random() - 0.5) * 0.1;
-                } else if (agent.type === 'park_path') {
-                    agent.angle += (_random() - 0.5) * 1.2;
-                    if (_random() < 0.15) {
-                        agents.push({ node: nextNode, angle: agent.angle + (_random() > 0.5 ? _PI_2 : -_PI_2), type: 'park_path', life: 30, z: 0 });
-                    }
-                    if (getTerrain(nx, ny, seedOffset) !== T_PARK) forceMerge = true;
                 }
             }
 
@@ -1060,6 +1053,57 @@ export default function App() {
                         return true;
                     });
                 }
+                const finalDegrees = new Map();
+                for (let i = 0; i < cEdges.length; i++) {
+                    const e = cEdges[i];
+                    finalDegrees.set(e.n1.id, (finalDegrees.get(e.n1.id) || 0) + 1);
+                    finalDegrees.set(e.n2.id, (finalDegrees.get(e.n2.id) || 0) + 1);
+                }
+
+                const nodesToReplace = [];
+                for (const [nodeId, degree] of finalDegrees.entries()) {
+                    if (degree >= 3 && _random() < 0.2) { // 20% of intersections become roundabouts/slip-lanes
+                        const node = chunk.nodes.find(n => n.id === nodeId);
+                        if (node && node.z === 0) nodesToReplace.push(node);
+                    }
+                }
+                
+                nodesToReplace.forEach(centerNode => {
+                    const connectedEdges = cEdges.filter(e => e.n1 === centerNode || e.n2 === centerNode);
+                    if (connectedEdges.length < 3) return;
+                    if (connectedEdges.some(e => e.type === 'highway' || e.type === 'causeway' || e.type === 'ramp' || e.type === 'alley')) return;
+
+                    const sortedEdges = connectedEdges.map(e => {
+                        const otherNode = e.n1 === centerNode ? e.n2 : e.n1;
+                        const angle = _atan2(otherNode.y - centerNode.y, otherNode.x - centerNode.x);
+                        return { e, otherNode, angle };
+                    }).sort((a, b) => a.angle - b.angle);
+
+                    const radius = connectedEdges.length > 3 ? 20 : 15;
+                    const rNodes = [];
+                    for (let i = 0; i < sortedEdges.length; i++) {
+                        const item = sortedEdges[i];
+                        const dx = item.otherNode.x - centerNode.x;
+                        const dy = item.otherNode.y - centerNode.y;
+                        const dist = _sqrt(dx*dx + dy*dy);
+                        if (dist < 40) return; // Too short to make a roundabout
+                        
+                        const rx = centerNode.x + (dx / dist) * radius;
+                        const ry = centerNode.y + (dy / dist) * radius;
+                        const rn = addNode(chunk, rx, ry, 0);
+                        rNodes.push(rn);
+                        
+                        if (item.e.n1 === centerNode) item.e.n1 = rn;
+                        else item.e.n2 = rn;
+                    }
+
+                    for (let i = 0; i < rNodes.length; i++) {
+                        const n1 = rNodes[i];
+                        const n2 = rNodes[(i + 1) % rNodes.length];
+                        cEdges.push({ n1, n2, type: 'suburb_road', isBridge: false }); // turning connection road
+                    }
+                });
+
                 chunk.edges = cEdges;
                 chunk.roadGrid = buildRoadGrid(chunk.edges);
                 chunk.phase = 'BUILDINGS';
@@ -1112,7 +1156,7 @@ export default function App() {
                                 const e = nearbyEdges[ei];
                                 let hw = 1.5;
                                 if (e.type === 'highway') hw = 4;
-                                else if (e.type === 'park_path' || e.type === 'alley') hw = 0.5;
+                                else if (e.type === 'alley') hw = 1.5;
                                 const rObb = roadSegmentToObb(e.n1.x, e.n1.y, e.n2.x, e.n2.y, hw + 1);
                                 if (rObb && obbVsObb(fenceObb, rObb, 0)) { crossesRoad = true; break; }
                             }
@@ -1216,10 +1260,8 @@ export default function App() {
             batchDraw('#475569', 1.2, e => !e.isBridge && e.type === 'alley');
             ctx.restore();
 
-            // Park trails dashed
-            ctx.save(); ctx.setLineDash([3, 2]);
-            batchDraw('#059669', 1.4, e => !e.isBridge && e.type === 'park_path');
-            ctx.restore();
+            // Alleys (narrow back roads)
+            batchDraw('#6b7280', 1.8, e => !e.isBridge && e.type === 'alley');
 
             // Parking lots
             const buildings = chunk.buildings;
