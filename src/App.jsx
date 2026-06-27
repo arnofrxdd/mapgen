@@ -838,32 +838,31 @@ export default function App() {
 
                 let forceMerge = agent.life <= 0;
 
+                // Ramps that run out of life become street generators at ground level
                 if (forceMerge && agent.type === 'ramp') {
-                    agent.type = 'street';
-                    agent.life = 100;
-                    forceMerge = false;
-                    agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'street', life: 80, z: 0 });
-                    agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'street', life: 80, z: 0 });
-                    const cityNode = findNearestNode(chunk, agent.node.x, agent.node.y, 120, agent.node, 0);
-                    if (cityNode) chunk.edges.push({ n1: agent.node, n2: cityNode, type: 'street', isBridge: false });
+                    const gndNode = findNearestNode(chunk, agent.node.x, agent.node.y, 180, agent.node, 0);
+                    if (gndNode && !isInvalidRampConnection(chunk, gndNode)) {
+                        chunk.edges.push({ n1: agent.node, n2: gndNode, type: 'ramp', isBridge: false });
+                    } else {
+                        // no ground node nearby — grow streets from the landing spot
+                        agents.push({ node: agent.node, angle: agent.angle, type: 'street', life: 80, z: 0 });
+                        agents.push({ node: agent.node, angle: agent.angle + _PI_2, type: 'street', life: 60, z: 0 });
+                        agents.push({ node: agent.node, angle: agent.angle - _PI_2, type: 'street', life: 60, z: 0 });
+                    }
+                    agents.splice(idx, 1);
+                    continue;
                 }
 
                 const stepAmount = agent.type === 'alley' ? ALLEY_STEP : STEP_SIZE;
 
-                // Bridges must go STRAIGHT — skip the grid-angle snap while bridging
-                if (!agent.wasBridge && (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'alley' || agent.type === 'highway')) {
+                // Grid-angle snap for land agents only (never for ramps)
+                if (agent.type !== 'ramp' && (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'alley' || agent.type === 'highway')) {
                     const localGrid = getGridAngle(agent.node.x, agent.node.y, seedOffset);
                     let diff = agent.angle - localGrid;
                     while (diff > _PI) diff -= _PI2;
                     while (diff < -_PI) diff += _PI2;
                     const snappedDiff = Math.round(diff / _PI_2) * _PI_2;
                     agent.angle = localGrid + snappedDiff;
-                } else if (agent.wasBridge && agent.bridgeAngle !== undefined) {
-                    // Gently steer the bridge back toward its locked entry angle so it doesn't drift
-                    let diff = agent.bridgeAngle - agent.angle;
-                    while (diff > _PI) diff -= _PI2;
-                    while (diff < -_PI) diff += _PI2;
-                    agent.angle += diff * 0.25;
                 }
 
                 let nx = agent.node.x + _cos(agent.angle) * stepAmount;
@@ -898,90 +897,21 @@ export default function App() {
                 }
 
                 const nextTerrain = getTerrain(nx, ny, seedOffset);
-                let isBridge = false;
+                const isBridge = false; // bridges are handled in post-processing BRIDGES phase, not by agents
 
-                if (!forceMerge && agent.type === 'causeway' && nextTerrain !== T_WATER) {
-                    agent.type = 'street';
-                    agent.life = 60;
-                } else if (!forceMerge && agent.type === 'street' && nextTerrain === T_SUBURB) {
+                // Type transitions on terrain change
+                if (!forceMerge && agent.type === 'street' && nextTerrain === T_SUBURB) {
                     agent.type = 'suburb_road';
                 } else if (!forceMerge && agent.type === 'suburb_road' && nextTerrain === T_CITY) {
                     agent.type = 'street';
                 }
 
-                if (!forceMerge && (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'highway')) {
-                    const probeR = agent.type === 'highway' ? 80 : 45;
-                    const isNearWater = (
-                        getTerrain(nx + probeR, ny, seedOffset) === T_WATER ||
-                        getTerrain(nx - probeR, ny, seedOffset) === T_WATER ||
-                        getTerrain(nx, ny + probeR, seedOffset) === T_WATER ||
-                        getTerrain(nx, ny - probeR, seedOffset) === T_WATER
-                    );
-                    // Only spawn causeways for street/suburb_road — highways bridge on their own
-                    if ((agent.type === 'street' || agent.type === 'suburb_road') && (isNearWater || nextTerrain === T_WATER)) {
-                        let hitLand = false;
-                        const cosA = _cos(agent.angle), sinA = _sin(agent.angle);
-                        for (let i = 1; i <= 300; i++) {
-                            const rx = agent.node.x + cosA * (STEP_SIZE * i);
-                            const ry = agent.node.y + sinA * (STEP_SIZE * i);
-                            if (rx < minX || rx >= maxX || ry < minY || ry >= maxY) break;
-                            const terrain = getTerrain(rx, ry, seedOffset);
-                            if (terrain !== T_WATER) { hitLand = true; break; }
-                        }
-                        if (hitLand) {
-                            let alreadyExists = false;
-                            const ct = chunk.causewayTargets;
-                            for (let ci = 0; ci < ct.length; ci++) {
-                                const cdx = ct[ci].x - agent.node.x, cdy = ct[ci].y - agent.node.y;
-                                if (cdx * cdx + cdy * cdy < 22500) { alreadyExists = true; break; }
-                            }
-                            if (!alreadyExists) {
-                                ct.push({ x: agent.node.x, y: agent.node.y });
-                                agents.push({ node: agent.node, angle: agent.angle, type: 'causeway', life: 200, z: 0, wasBridge: true });
-                            }
-                            forceMerge = true;
-                        } else if (isNearWater && nextTerrain !== T_WATER) {
-                            forceMerge = true;
-                        }
-                    }
-                    // Only spawn island causeways from highways that are NOT currently mid-bridge
-                    if (agent.type === 'highway' && isNearWater && nextTerrain !== T_WATER && !agent.wasBridge) {
-                        let hitLand = false;
-                        const cosA = _cos(agent.angle), sinA = _sin(agent.angle);
-                        for (let i = 1; i <= 300; i++) {
-                            const rx = agent.node.x + cosA * (STEP_SIZE * i);
-                            const ry = agent.node.y + sinA * (STEP_SIZE * i);
-                            if (rx < minX || rx >= maxX || ry < minY || ry >= maxY) break;
-                            const terrain = getTerrain(rx, ry, seedOffset);
-                            if (terrain !== T_WATER) { hitLand = true; break; }
-                        }
-                        if (hitLand) {
-                            let alreadyExists = false;
-                            const ct = chunk.causewayTargets;
-                            for (let ci = 0; ci < ct.length; ci++) {
-                                const cdx = ct[ci].x - agent.node.x, cdy = ct[ci].y - agent.node.y;
-                                if (cdx * cdx + cdy * cdy < 22500) { alreadyExists = true; break; }
-                            }
-                            if (!alreadyExists) {
-                                ct.push({ x: agent.node.x, y: agent.node.y });
-                                agents.push({ node: agent.node, angle: agent.angle, type: 'causeway', life: 200, z: 0, wasBridge: true });
-                            }
-                        }
-                    }
-                }
-
+                // All agents stop at water — bridges are built as post-process
                 if (!forceMerge && nextTerrain === T_WATER) {
                     if (agent.type === 'ramp') { agents.splice(idx, 1); continue; }
-                    else if (agent.type === 'highway' || agent.type === 'causeway') {
-                        isBridge = true;
-                        if (!agent.wasBridge) {
-                            // Lock bridge entry angle — will be maintained straight for the whole crossing
-                            agent.bridgeAngle = agent.angle;
-                        }
-                        agent.wasBridge = true;
-                    }
                     else if (agent.type === 'alley') { forceMerge = true; }
                     else if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'coast') {
+                        // Coast-following: steer along the shoreline instead of stopping abruptly
                         agent.type = 'coast';
                         const eps = 2;
                         const sx = agent.node.x + seedOffset, sy = agent.node.y + seedOffset;
@@ -998,6 +928,9 @@ export default function App() {
                         ny = agent.node.y + _sin(agent.angle) * (STEP_SIZE * 0.8);
                         if (getTerrain(nx, ny, seedOffset) === T_WATER || nx < minX || nx > maxX || ny < minY || ny > maxY) forceMerge = true;
                         else agent.life = _max(agent.life, 30);
+                    } else {
+                        // highways and any other type just stop at water
+                        forceMerge = true;
                     }
                 } else if (!forceMerge && nextTerrain === T_PARK) {
                     if (agent.type === 'alley') forceMerge = true;
@@ -1097,28 +1030,8 @@ export default function App() {
                             });
                         }
                     } else {
-                        agent.angle += (_random() - 0.5) * (isBridge ? 0.0 : 0.3);
+                        agent.angle += (_random() - 0.5) * 0.3;
                     }
-
-                    if (agent.isArrivingBridge && isBridge) {
-                        const centerX = chunk.cx * CHUNK_SIZE + 600;
-                        const centerY = chunk.cy * CHUNK_SIZE + 600;
-                        const targetAngle = _atan2(centerY - ny, centerX - nx);
-                        let diff = targetAngle - agent.angle;
-                        while (diff > _PI) diff -= _PI2;
-                        while (diff < -_PI) diff += _PI2;
-                        agent.angle += diff * 0.15;
-                    }
-                    if (!isBridge) agent.isArrivingBridge = false;
-
-                    if (agent.wasBridge && !isBridge) {
-                        let cityNode = findNearestNode(chunk, nx, ny, 150, nextNode, zLevel);
-                        if (cityNode && isInvalidRampConnection(chunk, cityNode)) cityNode = null;
-                        if (cityNode) chunk.edges.push({ n1: nextNode, n2: cityNode, type: 'ramp', isBridge: false });
-                        agents.push({ node: nextNode, angle: agent.angle + _PI / 6, type: 'ramp', life: 10, z: agent.z, dz: -agent.z / 10, turnDir: 1 });
-                        agents.push({ node: nextNode, angle: agent.angle - _PI / 6, type: 'ramp', life: 10, z: agent.z, dz: -agent.z / 10, turnDir: -1 });
-                    }
-                    agent.wasBridge = isBridge;
 
                     const isDenseArea =
                         getTerrain(nextNode.x + 80, nextNode.y, seedOffset) !== T_WATER &&
@@ -1239,6 +1152,100 @@ export default function App() {
                 });
 
                 chunk.edges = cEdges;
+                chunk.roadGrid = buildRoadGrid(chunk.edges);
+                chunk.phase = 'BRIDGES';
+            }
+        }
+
+        // ─── BRIDGES phase: post-process straight bridges across water ───────────────
+        if (chunk.phase === 'BRIDGES') {
+            const bridgeAngles = [0, _PI_4, _PI_2, 3 * _PI_4, _PI, -3 * _PI_4, -_PI_2, -_PI_4];
+            const MAX_BRIDGE_LEN = 3200; // max water crossing in world units
+            const MIN_BRIDGE_LEN = 80;   // avoid zero-length bridges
+            const BRIDGE_STEP = STEP_SIZE;
+            const usedSources = new Set(); // prevent one node spawning many bridges
+
+            for (let ni = 0; ni < chunk.nodes.length; ni++) {
+                const srcNode = chunk.nodes[ni];
+                if (srcNode.z !== 0) continue; // only ground-level sources
+                if (usedSources.has(srcNode.id)) continue;
+
+                const srcTerrain = getTerrain(srcNode.x, srcNode.y, seedOffset);
+                if (srcTerrain === T_WATER) continue; // node itself is in water
+
+                // Check if this node is coastal (immediately adjacent to water)
+                let isCoastal = false;
+                for (let d = 0; d < bridgeAngles.length; d++) {
+                    const probe = getTerrain(srcNode.x + _cos(bridgeAngles[d]) * STEP_SIZE, srcNode.y + _sin(bridgeAngles[d]) * STEP_SIZE, seedOffset);
+                    if (probe === T_WATER) { isCoastal = true; break; }
+                }
+                if (!isCoastal) continue;
+
+                // Cast rays across water to find opposite shore
+                for (let d = 0; d < bridgeAngles.length; d++) {
+                    const angle = bridgeAngles[d];
+                    const cosA = _cos(angle), sinA = _sin(angle);
+
+                    // First step must immediately enter water
+                    const firstX = srcNode.x + cosA * BRIDGE_STEP;
+                    const firstY = srcNode.y + sinA * BRIDGE_STEP;
+                    if (getTerrain(firstX, firstY, seedOffset) !== T_WATER) continue;
+
+                    // Walk until we hit land or exceed max distance
+                    let landX = -1, landY = -1, dist = 0;
+                    for (let step = 2; step * BRIDGE_STEP <= MAX_BRIDGE_LEN; step++) {
+                        const rx = srcNode.x + cosA * (step * BRIDGE_STEP);
+                        const ry = srcNode.y + sinA * (step * BRIDGE_STEP);
+                        const t = getTerrain(rx, ry, seedOffset);
+                        if (t !== T_WATER) {
+                            if (t === T_CITY || t === T_SUBURB || t === T_PARK) {
+                                landX = rx; landY = ry;
+                                dist = step * BRIDGE_STEP;
+                            }
+                            break;
+                        }
+                    }
+                    if (landX < 0 || dist < MIN_BRIDGE_LEN) continue;
+
+                    // Check for duplicate: another bridge already starts very close in this direction
+                    let duplicate = false;
+                    for (let ei = 0; ei < chunk.edges.length; ei++) {
+                        const e = chunk.edges[ei];
+                        if (!e.isBridge) continue;
+                        const edx = e.n1.x - srcNode.x, edy = e.n1.y - srcNode.y;
+                        if (edx * edx + edy * edy < 22500) {
+                            const ea = _atan2(e.n2.y - e.n1.y, e.n2.x - e.n1.x);
+                            let da = _abs(ea - angle); if (da > _PI) da = _PI2 - da;
+                            if (da < 0.5) { duplicate = true; break; }
+                        }
+                    }
+                    if (duplicate) continue;
+
+                    // Build the bridge: srcNode → landNode
+                    const landNode = addNode(chunk, landX, landY, 0);
+                    chunk.edges.push({ n1: srcNode, n2: landNode, type: 'causeway', isBridge: true });
+                    usedSources.add(srcNode.id);
+
+                    // Spawn street agents from the landing node to grow a road network there
+                    chunk.agents.push({ node: landNode, angle: angle, type: 'street', life: Math.floor(150 * LONG_ROAD_BIAS), z: 0 });
+                    chunk.agents.push({ node: landNode, angle: angle + _PI_2, type: 'street', life: 80, z: 0 });
+                    chunk.agents.push({ node: landNode, angle: angle - _PI_2, type: 'street', life: 80, z: 0 });
+
+                    // Queue the chunk containing the landing node if it's in a different chunk
+                    const landCx = _floor(landX / CHUNK_SIZE);
+                    const landCy = _floor(landY / CHUNK_SIZE);
+                    const landKey = `${landCx},${landCy}`;
+                    if (landKey !== chunk.key && !world.generatedChunks.has(landKey) && !world.chunkQueue.includes(landKey)) {
+                        world.chunkQueue.push(landKey);
+                    }
+                    break; // one bridge per coastal node is enough
+                }
+            }
+
+            // Re-run growing loop with any new bridge-spawned street agents
+            if (chunk.agents.length > 0) {
+                chunk.phase = 'GROWING';
+            } else {
                 chunk.roadGrid = buildRoadGrid(chunk.edges);
                 chunk.phase = 'BUILDINGS';
             }
