@@ -850,13 +850,20 @@ export default function App() {
 
                 const stepAmount = agent.type === 'alley' ? ALLEY_STEP : STEP_SIZE;
 
-                if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'alley' || agent.type === 'highway') {
+                // Bridges must go STRAIGHT — skip the grid-angle snap while bridging
+                if (!agent.wasBridge && (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'alley' || agent.type === 'highway')) {
                     const localGrid = getGridAngle(agent.node.x, agent.node.y, seedOffset);
                     let diff = agent.angle - localGrid;
                     while (diff > _PI) diff -= _PI2;
                     while (diff < -_PI) diff += _PI2;
                     const snappedDiff = Math.round(diff / _PI_2) * _PI_2;
                     agent.angle = localGrid + snappedDiff;
+                } else if (agent.wasBridge && agent.bridgeAngle !== undefined) {
+                    // Gently steer the bridge back toward its locked entry angle so it doesn't drift
+                    let diff = agent.bridgeAngle - agent.angle;
+                    while (diff > _PI) diff -= _PI2;
+                    while (diff < -_PI) diff += _PI2;
+                    agent.angle += diff * 0.25;
                 }
 
                 let nx = agent.node.x + _cos(agent.angle) * stepAmount;
@@ -937,8 +944,8 @@ export default function App() {
                             forceMerge = true;
                         }
                     }
-                    // Ensure every highway agent that reaches shore also emits a causeway toward any nearby island
-                    if (agent.type === 'highway' && isNearWater && nextTerrain !== T_WATER) {
+                    // Only spawn island causeways from highways that are NOT currently mid-bridge
+                    if (agent.type === 'highway' && isNearWater && nextTerrain !== T_WATER && !agent.wasBridge) {
                         let hitLand = false;
                         const cosA = _cos(agent.angle), sinA = _sin(agent.angle);
                         for (let i = 1; i <= 300; i++) {
@@ -965,7 +972,14 @@ export default function App() {
 
                 if (!forceMerge && nextTerrain === T_WATER) {
                     if (agent.type === 'ramp') { agents.splice(idx, 1); continue; }
-                    else if (agent.type === 'highway' || agent.type === 'causeway') { isBridge = true; agent.wasBridge = true; }
+                    else if (agent.type === 'highway' || agent.type === 'causeway') {
+                        isBridge = true;
+                        if (!agent.wasBridge) {
+                            // Lock bridge entry angle — will be maintained straight for the whole crossing
+                            agent.bridgeAngle = agent.angle;
+                        }
+                        agent.wasBridge = true;
+                    }
                     else if (agent.type === 'alley') { forceMerge = true; }
                     else if (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'coast') {
                         agent.type = 'coast';
