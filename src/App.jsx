@@ -467,7 +467,7 @@ export default function App() {
             const bn = borderNodes[i];
             if (bn.x >= minX - 1 && bn.x <= maxX + 1 && bn.y >= minY - 1 && bn.y <= maxY + 1) {
                 const newNode = addNode(chunk, bn.x, bn.y, bn.z);
-                const agentLife = bn.type === 'highway' ? 1800 : 120;
+                const agentLife = bn.type === 'highway' ? 2400 : bn.type === 'causeway' ? 250 : 120;
                 chunk.agents.push({
                     node: newNode, angle: bn.angle, type: bn.type, life: agentLife, z: bn.z,
                     wasBridge: bn.wasBridge || false, isCardinal: bn.isCardinal || false,
@@ -902,26 +902,24 @@ export default function App() {
                     agent.type = 'street';
                 }
 
-                if (!forceMerge && (agent.type === 'street' || agent.type === 'suburb_road')) {
+                if (!forceMerge && (agent.type === 'street' || agent.type === 'suburb_road' || agent.type === 'highway')) {
+                    const probeR = agent.type === 'highway' ? 80 : 45;
                     const isNearWater = (
-                        getTerrain(nx + 45, ny, seedOffset) === T_WATER ||
-                        getTerrain(nx - 45, ny, seedOffset) === T_WATER ||
-                        getTerrain(nx, ny + 45, seedOffset) === T_WATER ||
-                        getTerrain(nx, ny - 45, seedOffset) === T_WATER
+                        getTerrain(nx + probeR, ny, seedOffset) === T_WATER ||
+                        getTerrain(nx - probeR, ny, seedOffset) === T_WATER ||
+                        getTerrain(nx, ny + probeR, seedOffset) === T_WATER ||
+                        getTerrain(nx, ny - probeR, seedOffset) === T_WATER
                     );
-                    if (isNearWater || nextTerrain === T_WATER) {
-                        let hitLand = false, hasCity = false;
+                    // Only spawn causeways for street/suburb_road — highways bridge on their own
+                    if ((agent.type === 'street' || agent.type === 'suburb_road') && (isNearWater || nextTerrain === T_WATER)) {
+                        let hitLand = false;
                         const cosA = _cos(agent.angle), sinA = _sin(agent.angle);
-                        for (let i = 1; i <= 250; i++) {
+                        for (let i = 1; i <= 300; i++) {
                             const rx = agent.node.x + cosA * (STEP_SIZE * i);
                             const ry = agent.node.y + sinA * (STEP_SIZE * i);
                             if (rx < minX || rx >= maxX || ry < minY || ry >= maxY) break;
                             const terrain = getTerrain(rx, ry, seedOffset);
-                            if (terrain !== T_WATER) {
-                                hitLand = true;
-                                if (terrain === T_CITY || terrain === T_SUBURB) hasCity = true;
-                                break;
-                            }
+                            if (terrain !== T_WATER) { hitLand = true; break; }
                         }
                         if (hitLand) {
                             let alreadyExists = false;
@@ -932,11 +930,35 @@ export default function App() {
                             }
                             if (!alreadyExists) {
                                 ct.push({ x: agent.node.x, y: agent.node.y });
-                                agents.push({ node: agent.node, angle: agent.angle, type: 'causeway', life: 150, z: 0, wasBridge: true });
+                                agents.push({ node: agent.node, angle: agent.angle, type: 'causeway', life: 200, z: 0, wasBridge: true });
                             }
                             forceMerge = true;
                         } else if (isNearWater && nextTerrain !== T_WATER) {
                             forceMerge = true;
+                        }
+                    }
+                    // Ensure every highway agent that reaches shore also emits a causeway toward any nearby island
+                    if (agent.type === 'highway' && isNearWater && nextTerrain !== T_WATER) {
+                        let hitLand = false;
+                        const cosA = _cos(agent.angle), sinA = _sin(agent.angle);
+                        for (let i = 1; i <= 300; i++) {
+                            const rx = agent.node.x + cosA * (STEP_SIZE * i);
+                            const ry = agent.node.y + sinA * (STEP_SIZE * i);
+                            if (rx < minX || rx >= maxX || ry < minY || ry >= maxY) break;
+                            const terrain = getTerrain(rx, ry, seedOffset);
+                            if (terrain !== T_WATER) { hitLand = true; break; }
+                        }
+                        if (hitLand) {
+                            let alreadyExists = false;
+                            const ct = chunk.causewayTargets;
+                            for (let ci = 0; ci < ct.length; ci++) {
+                                const cdx = ct[ci].x - agent.node.x, cdy = ct[ci].y - agent.node.y;
+                                if (cdx * cdx + cdy * cdy < 22500) { alreadyExists = true; break; }
+                            }
+                            if (!alreadyExists) {
+                                ct.push({ x: agent.node.x, y: agent.node.y });
+                                agents.push({ node: agent.node, angle: agent.angle, type: 'causeway', life: 200, z: 0, wasBridge: true });
+                            }
                         }
                     }
                 }
@@ -970,10 +992,12 @@ export default function App() {
                 }
 
                 const zLevel = agent.z || 0;
+                // Ramps descend toward ground — always snap to z=0 nodes so they connect to the road grid
+                const snapZ = agent.type === 'ramp' ? 0 : zLevel;
 
                 if (forceMerge) {
-                    const mergeDist = agent.type === 'alley' ? 40 : agent.type === 'ramp' ? 80 : (agent.type === 'highway' || agent.type === 'causeway' ? 300 : 45);
-                    let target = findNearestNode(chunk, agent.node.x, agent.node.y, mergeDist, agent.node, zLevel);
+                    const mergeDist = agent.type === 'alley' ? 40 : agent.type === 'ramp' ? 160 : (agent.type === 'highway' || agent.type === 'causeway' ? 300 : 45);
+                    let target = findNearestNode(chunk, agent.node.x, agent.node.y, mergeDist, agent.node, snapZ);
 
                     if (target && agent.type === 'ramp') {
                         const tt = getTerrain(target.x, target.y, seedOffset);
@@ -982,7 +1006,7 @@ export default function App() {
                     if (target && agent.type === 'alley') {
                         if (isRampNode(chunk, target)) target = null;
                     }
-                    if (target && (agent.type === 'highway' || agent.type === 'causeway' || !checkWaterCrossing(agent.node, target, seedOffset))) {
+                    if (target && (agent.type === 'highway' || agent.type === 'causeway' || agent.type === 'ramp' || !checkWaterCrossing(agent.node, target, seedOffset))) {
                         if (isValidAngle(chunk, agent.node, target)) {
                             chunk.edges.push({ n1: agent.node, n2: target, type: agent.type, isBridge: (agent.type === 'highway' || agent.type === 'causeway') ? isBridge : false });
                         }
@@ -995,7 +1019,8 @@ export default function App() {
                 }
 
                 const mergeSens = agent.type === 'alley' ? MERGE_RADIUS * 0.8 : MERGE_RADIUS;
-                let nearbyNode = isBridge ? null : findNearestNode(chunk, nx, ny, mergeSens, agent.node, zLevel);
+                // Ramps snap to ground-level roads — use snapZ=0 so descending ramps merge into the street grid
+                let nearbyNode = isBridge ? null : findNearestNode(chunk, nx, ny, mergeSens, agent.node, snapZ);
 
                 if (nearbyNode && agent.type === 'ramp') {
                     const tt = getTerrain(nearbyNode.x, nearbyNode.y, seedOffset);
@@ -1052,7 +1077,8 @@ export default function App() {
                                 angle: agent.angle + tDir * _PI_4,
                                 type: 'ramp',
                                 life: 8,
-                                z: 0,
+                                z: agent.z,
+                                dz: -agent.z/8,
                                 turnDir: tDir
                             });
                         }
