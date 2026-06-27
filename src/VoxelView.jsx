@@ -654,82 +654,149 @@ function buildJunctions(builder, nodes, edges, mats, nodeConnections, junctionPo
 }
 
 function buildSmoothRamps(builder, rampEdges, mats) {
-  const paths = [];
-  const edgeSet = new Set(rampEdges);
-  
-  while(edgeSet.size > 0) {
-    const startEdge = edgeSet.values().next().value;
-    edgeSet.delete(startEdge);
-    
-    const path = [startEdge.n1, startEdge.n2];
-    
-    let current = startEdge.n2;
-    while(true) {
-      let nextEdge = null;
-      for (const e of edgeSet) {
-        if (e.n1.id === current.id) { path.push(e.n2); nextEdge = e; break; }
-        if (e.n2.id === current.id) { path.push(e.n1); nextEdge = e; break; }
-      }
-      if (nextEdge) { current = path[path.length - 1]; edgeSet.delete(nextEdge); } 
-      else break;
+  // ── Group edges by rampGroupId so each ramp is one smooth path ──────────
+  const groups = new Map(); // rampGroupId -> [edge, ...]
+  const ungrouped = [];
+
+  for (const e of rampEdges) {
+    if (e.rampGroupId != null) {
+      if (!groups.has(e.rampGroupId)) groups.set(e.rampGroupId, []);
+      groups.get(e.rampGroupId).push(e);
+    } else {
+      ungrouped.push(e);
     }
-    
-    current = startEdge.n1;
-    while(true) {
-      let prevEdge = null;
-      for (const e of edgeSet) {
-        if (e.n1.id === current.id) { path.unshift(e.n2); prevEdge = e; break; }
-        if (e.n2.id === current.id) { path.unshift(e.n1); prevEdge = e; break; }
-      }
-      if (prevEdge) { current = path[0]; edgeSet.delete(prevEdge); } 
-      else break;
-    }
-    paths.push(path);
   }
+
+  const paths = [];
+
+  // Build ordered node-paths from a set of edges via bidirectional adjacency walk
+  const chainEdges = (edges) => {
+    const adj = new Map(); // nodeId -> [{node, edge}]
+    for (const e of edges) {
+      if (!adj.has(e.n1.id)) adj.set(e.n1.id, []);
+      if (!adj.has(e.n2.id)) adj.set(e.n2.id, []);
+      adj.get(e.n1.id).push({ node: e.n2, edge: e });
+      adj.get(e.n2.id).push({ node: e.n1, edge: e });
+    }
+
+    const usedEdges = new Set();
+    const localPaths = [];
+
+    for (const e of edges) {
+      if (usedEdges.has(e)) continue;
+
+      const path = [e.n1, e.n2];
+      usedEdges.add(e);
+
+      // Walk forward from n2
+      let tip = e.n2;
+      while (true) {
+        const nexts = adj.get(tip.id) || [];
+        let found = false;
+        for (const { edge } of nexts) {
+          if (!usedEdges.has(edge)) {
+            usedEdges.add(edge);
+            const nextNode = edge.n1.id === tip.id ? edge.n2 : edge.n1;
+            path.push(nextNode);
+            tip = nextNode;
+            found = true;
+            break;
+          }
+        }
+        if (!found) break;
+      }
+
+      // Walk backward from n1
+      tip = e.n1;
+      while (true) {
+        const nexts = adj.get(tip.id) || [];
+        let found = false;
+        for (const { edge } of nexts) {
+          if (!usedEdges.has(edge)) {
+            usedEdges.add(edge);
+            const prevNode = edge.n1.id === tip.id ? edge.n2 : edge.n1;
+            path.unshift(prevNode);
+            tip = prevNode;
+            found = true;
+            break;
+          }
+        }
+        if (!found) break;
+      }
+
+      localPaths.push(path);
+    }
+    return localPaths;
+  };
+
+  // Grouped (new-style) ramps
+  for (const [, edges] of groups) {
+    // Sort so highest-z node is first (ramp descends from bridge to ground)
+    edges.sort((a, b) => (b.n1.z || 0) - (a.n1.z || 0));
+    for (const p of chainEdges(edges)) paths.push(p);
+  }
+
+  // Legacy ungrouped ramps
+  if (ungrouped.length > 0) {
+    for (const p of chainEdges(ungrouped)) paths.push(p);
+  }
+
+  // ── Render each path ─────────────────────────────────────────────────────
+  const hw = ROAD_HW['ramp'] || 4.0;
+  const rMat = mats.ramp || mats.asphalt;
 
   for (const path of paths) {
     if (path.length < 2) continue;
-    
+
     const points = path.map(n => new THREE.Vector3(n.x, (n.z || 0) * BRIDGE_ELEV, n.y));
-    const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.5);
-    
+    // Clamp endpoints to guarantee curve passes through start/end exactly
+    const curvePoints = [points[0].clone(), ...points, points[points.length - 1].clone()];
+    const curve = new THREE.CatmullRomCurve3(curvePoints, false, 'catmullrom', 0.5);
+
     const len = curve.getLength();
-    const segments = Math.max(2, Math.floor(len / 3.0)); 
-    
-    const hw = ROAD_HW['ramp'] || 4.0;
-    const rMat = mats.ramp || mats.asphalt;
-    
+    if (len < 1) continue;
+    const segments = Math.max(4, Math.floor(len / 4.0));
+
     for (let i = 0; i < segments; i++) {
-      const t1 = i / segments;
-      const t2 = (i + 1) / segments;
-      
-      const p1 = curve.getPointAt(t1);
-      const p2 = curve.getPointAt(t2);
-      
-      const dx = p2.x - p1.x;
-      const dy = p2.y - p1.y;
-      const dz = p2.z - p1.z;
-      
-      const dist = Math.hypot(dx, dz);
-      const pitch = Math.atan2(dy, dist);
-      const ang = Math.atan2(dz, dx);
-      
+      const p1 = curve.getPointAt(i / segments);
+      const p2 = curve.getPointAt((i + 1) / segments);
+
+      const ddx = p2.x - p1.x;
+      const ddy = p2.y - p1.y;
+      const ddz = p2.z - p1.z;
+
+      const hDist = Math.hypot(ddx, ddz);
+      if (hDist < 0.01) continue;
+
+      const pitch = Math.atan2(ddy, hDist);
+      const ang = Math.atan2(ddz, ddx);
       const cx = (p1.x + p2.x) * 0.5;
       const cz = (p1.z + p2.z) * 0.5;
       const midY = (p1.y + p2.y) * 0.5;
-      const boxLen = dist + 0.1; 
-      
+      const boxLen = Math.hypot(ddx, ddy, ddz) + 0.1;
+
+      // Road deck
       builder.addBox(boxLen, ROAD_H, hw * 2, rMat, cx, midY + ROAD_H / 2, cz, -ang, pitch);
-      
+
+      // Guardrails
       for (const s of [-1, 1]) {
         const ro = s * (hw - 0.28);
         const ox = -Math.sin(ang) * ro;
         const oz = Math.cos(ang) * ro;
         builder.addBox(boxLen, 0.6, 0.18, mats.bridgeSide, cx + ox, midY + ROAD_H + 0.3, cz + oz, -ang, pitch);
+        builder.addBox(boxLen, 0.12, 0.12, mats.poleMat, cx + ox, midY + ROAD_H + 0.72, cz + oz, -ang, pitch);
       }
-      
+
+      // Dashed center line
       if (i % 3 === 0) {
-        builder.addBox(boxLen * 0.6, 0.06, 0.22, mats.whiteDiv, cx, midY + ROAD_H + 0.03, cz, -ang, pitch);
+        builder.addBox(boxLen * 0.55, 0.05, 0.20, mats.whiteDiv, cx, midY + ROAD_H + 0.03, cz, -ang, pitch);
+      }
+
+      // Pillars under elevated sections
+      if (midY > 2.5) {
+        const pillarH = midY - ROAD_H;
+        builder.addBox(1.2, pillarH, 1.2, mats.bridgePillar, cx, pillarH / 2, cz, -ang);
+        builder.addBox(1.2, 0.6, hw * 2 + 1.0, mats.bridgeSide, cx, pillarH - 0.3, cz, -ang);
       }
     }
   }
